@@ -2,7 +2,7 @@
 
 ## Integration surfaces
 - Plugin: `Jido.MemoryOS.Plugin`
-- Actions: `Jido.MemoryOS.Actions.Remember|Retrieve|Forget|Consolidate`
+- Actions: `Jido.MemoryOS.Actions.Remember|Retrieve|Forget|Consolidate|PreTurn|PostTurn`
 - Long-term persistence behavior: `Jido.MemoryOS.LongTermStore`
 - Framework adapters:
   - `Jido.MemoryOS.FrameworkAdapter.SingleAgent`
@@ -17,11 +17,13 @@ flowchart LR
     RULES -->|capture| REM["Jido.MemoryOS.remember"]
     RULES -->|skip| CONT["continue"]
 
-    AGENT["Agent route memory_os.*"] --> ACT["Action module"] --> API["Jido.MemoryOS facade"]
+    AGENT["Agent route memory_os.remember/retrieve/forget/consolidate"] --> ACT["Action module"] --> API["Jido.MemoryOS facade"]
+    AGENT --> ADAPT["memory_os.pre_turn/post_turn"] --> FW["Configured framework adapter"]
+    FW --> API
 ```
 
 ## Why actions exist
-Action wrappers provide schema-validated, pipeline-friendly access to facade operations and standardize result key placement in agent state.
+Action wrappers provide schema-validated, pipeline-friendly access to facade operations and framework adapter hooks, while standardizing result key placement in agent state.
 
 ## Framework adapter contract
 `Jido.MemoryOS.FrameworkAdapter` defines:
@@ -37,6 +39,7 @@ Reference adapters map common orchestration styles:
 ## Extensibility points
 - Semantic ranking provider behavior (`Retrieval.SemanticProvider`)
 - Capture rules/patterns in plugin config
+- Plugin-level framework adapter selector (`framework_adapter`, `framework_adapter_opts`)
 - Runtime option overlays from adapter payloads
 - Long-term store behavior (`LongTermStore`) for `:long` tier persistence
 - Compatibility mappers for legacy payload/query/result shapes (`Jido.MemoryOS.Compatibility`)

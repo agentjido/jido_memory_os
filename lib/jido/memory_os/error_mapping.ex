@@ -87,6 +87,36 @@ defmodule Jido.MemoryOS.ErrorMapping do
           details: details(operation, reason, %{code: :invalid_long_term_backend_opts})
         )
 
+      {:invalid_framework_adapter, adapter} ->
+        Jido.Error.validation_error("framework adapter must be a module",
+          kind: :config,
+          subject: :framework_adapter,
+          details:
+            details(operation, reason, %{code: :invalid_framework_adapter, adapter: adapter})
+        )
+
+      {:invalid_framework_adapter_callbacks, module, missing} ->
+        Jido.Error.validation_error("framework adapter is missing required callbacks",
+          kind: :config,
+          subject: module,
+          details:
+            details(operation, reason, %{
+              code: :invalid_framework_adapter_callbacks,
+              missing_callbacks: missing
+            })
+        )
+
+      {:missing_framework_adapter_module, module, reason_value} ->
+        Jido.Error.validation_error("framework adapter module could not be loaded",
+          kind: :config,
+          subject: module,
+          details:
+            details(operation, reason, %{
+              code: :missing_framework_adapter_module,
+              load_reason: reason_value
+            })
+        )
+
       {:missing_long_term_backend_option, key} ->
         Jido.Error.validation_error("long-term backend context is missing required option",
           kind: :config,

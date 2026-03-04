@@ -123,7 +123,7 @@ defmodule Jido.MemoryOS.Phase04IntegrationTest do
                opts
              )
 
-    assert length(records) >= 1
+    assert records != []
     assert String.contains?(String.downcase(hd(records).text || ""), "est")
   end
 
