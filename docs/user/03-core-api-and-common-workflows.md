@@ -61,6 +61,8 @@ opts = [
 ## Important behavior notes
 - `remember/3` writes metadata under `metadata["mem_os"]`.
 - `consolidate/2` is what drives short -> mid -> long lifecycle movement.
+- all `:long` tier read/write/delete/prune operations run through `Jido.MemoryOS.LongTermStore`.
+- default long-term backend is `Jido.MemoryOS.LongTermStore.ETS`; you can switch to Postgres or your own backend via config.
 - `retrieve/3` returns records only.
 - `explain_retrieval/3` returns records plus planner/ranker/context details.
 - `forget/3` is idempotent (`{:ok, false}` if already gone).

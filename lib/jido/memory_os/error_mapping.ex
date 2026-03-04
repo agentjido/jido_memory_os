@@ -98,6 +98,58 @@ defmodule Jido.MemoryOS.ErrorMapping do
             })
         )
 
+      {:invalid_long_term_backend_option, key, value} ->
+        Jido.Error.validation_error("long-term backend option is invalid",
+          kind: :config,
+          subject: key,
+          details:
+            details(operation, reason, %{
+              code: :invalid_long_term_backend_option,
+              option: key,
+              value: value
+            })
+        )
+
+      :postgrex_not_available ->
+        Jido.Error.validation_error("Postgrex dependency is not available",
+          kind: :config,
+          subject: :long_term_backend,
+          details: details(operation, reason, %{code: :postgrex_not_available})
+        )
+
+      {:postgres_connection_failed, reason_value} ->
+        Jido.Error.execution_error("failed to connect to PostgreSQL backend",
+          phase: :execution,
+          details:
+            details(operation, reason, %{
+              code: :postgres_connection_failed,
+              connection_reason: reason_value
+            })
+        )
+
+      {:postgres_query_failed, reason_value} ->
+        Jido.Error.execution_error("PostgreSQL backend query failed",
+          phase: :execution,
+          details:
+            details(operation, reason, %{code: :postgres_query_failed, query_reason: reason_value})
+        )
+
+      {:invalid_postgres_query_result, result} ->
+        Jido.Error.internal_error("PostgreSQL backend returned invalid query result",
+          details:
+            details(operation, reason, %{code: :invalid_postgres_query_result, result: result})
+        )
+
+      {:postgres_query_exception, exception, stacktrace} ->
+        Jido.Error.internal_error("PostgreSQL backend query raised an exception",
+          details:
+            details(operation, reason, %{
+              code: :postgres_query_exception,
+              exception: inspect(exception),
+              stacktrace: stacktrace
+            })
+        )
+
       :invalid_long_term_backend_operation ->
         Jido.Error.internal_error("long-term backend operation is unsupported",
           details: details(operation, reason, %{code: :invalid_long_term_backend_operation})

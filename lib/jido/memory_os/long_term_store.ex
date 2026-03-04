@@ -6,6 +6,10 @@ defmodule Jido.MemoryOS.LongTermStore do
   MemoryOS uses `Jido.MemoryOS.LongTermStore.ETS`, and applications can
   override it with Postgres/Redis/custom implementations.
 
+  Built-in backends:
+  - `Jido.MemoryOS.LongTermStore.ETS`
+  - `Jido.MemoryOS.LongTermStore.Postgres`
+
   The callback `opts` include resolved runtime context keys such as:
   - `:namespace`
   - `:store`

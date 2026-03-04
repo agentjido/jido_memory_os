@@ -3,6 +3,7 @@
 ## Integration surfaces
 - Plugin: `Jido.MemoryOS.Plugin`
 - Actions: `Jido.MemoryOS.Actions.Remember|Retrieve|Forget|Consolidate`
+- Long-term persistence behavior: `Jido.MemoryOS.LongTermStore`
 - Framework adapters:
   - `Jido.MemoryOS.FrameworkAdapter.SingleAgent`
   - `Jido.MemoryOS.FrameworkAdapter.MultiAgent`
@@ -37,7 +38,26 @@ Reference adapters map common orchestration styles:
 - Semantic ranking provider behavior (`Retrieval.SemanticProvider`)
 - Capture rules/patterns in plugin config
 - Runtime option overlays from adapter payloads
+- Long-term store behavior (`LongTermStore`) for `:long` tier persistence
 - Compatibility mappers for legacy payload/query/result shapes (`Jido.MemoryOS.Compatibility`)
+
+## LongTermStore dispatch path
+```mermaid
+flowchart LR
+    API["Jido.MemoryOS facade"] --> MM["MemoryManager"]
+    MM --> RT["Adapter.MemoryRuntime"]
+    RT --> TIER{"tier == :long ?"}
+    TIER -->|no| JR["Jido.Memory.Runtime + tier store"]
+    TIER -->|yes| LTS["LongTermStore behavior"]
+    LTS --> ETS["LongTermStore.ETS (default)"]
+    LTS --> PG["LongTermStore.Postgres"]
+    LTS --> CUS["Custom backend module"]
+```
+
+Long-term backend selection order:
+- per-call override: `opts[:long_term_backend]`
+- manager config: `manager.long_term_backend`
+- fallback: `Jido.MemoryOS.LongTermStore.ETS`
 
 ## How this enables intended goals
 - Integration stays ergonomic for real Jido agents and workflows.

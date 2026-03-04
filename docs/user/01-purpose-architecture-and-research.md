@@ -6,6 +6,7 @@
 It gives agents:
 - Structured short, mid, and long memory tiers
 - Deterministic lifecycle operations (ingest, consolidate, promote, prune)
+- Pluggable long-term persistence via `Jido.MemoryOS.LongTermStore`
 - Retrieval planning, ranking, and explainable context packaging
 - Governance controls (policy, approvals, masking, retention, audit)
 
@@ -27,6 +28,7 @@ Related work:
 ## Core components in this codebase
 - Facade API: `Jido.MemoryOS`
 - Control plane: `Jido.MemoryOS.MemoryManager`
+- Long-term persistence behavior: `Jido.MemoryOS.LongTermStore`
 - Tier lifecycle + metadata: `Jido.MemoryOS.Lifecycle`, `Jido.MemoryOS.Metadata`
 - Retrieval pipeline:
   - `Jido.MemoryOS.Query`
