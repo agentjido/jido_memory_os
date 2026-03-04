@@ -9,6 +9,7 @@
   - Preserves lineage back to short-memory source IDs.
 - `:long`
   - Durable semantic memory/facts with conflict strategy.
+  - Persistence path is always mediated by `Jido.MemoryOS.LongTermStore`.
 
 ## Metadata contract
 `Record.metadata["mem_os"]` is normalized by `Jido.MemoryOS.Metadata` and includes:
@@ -33,7 +34,8 @@ flowchart LR
     SCORE -->|eligible| LONG["build_long_record + remember"]
     SCORE -->|not eligible| REQ["requeue candidate"]
 
-    LONG --> CONFLICT["conflict strategy: replace/append/version"]
+    LONG --> LTS["LongTermStore backend"]
+    LTS --> CONFLICT["conflict strategy: replace/append/version"]
 ```
 
 ## Consolidation mechanics
@@ -42,6 +44,21 @@ flowchart LR
   - `long_candidates`
 - Consolidation reads selected short candidates, builds mid structures, then evaluates page promotion to long.
 - Conflict handling tracks previous IDs and emits conflict entries into `last_conflicts`.
+
+## Long-term backend model
+- `Jido.MemoryOS.Adapter.MemoryRuntime` dispatches `:long` operations to a `LongTermStore` behavior.
+- Default backend: `Jido.MemoryOS.LongTermStore.ETS`.
+- Built-in persistent backend: `Jido.MemoryOS.LongTermStore.Postgres`.
+- Integrators can provide custom backends by implementing:
+  - `remember/3`
+  - `get/3`
+  - `recall/3`
+  - `forget/3`
+  - `prune/2`
+- Backend selection is resolved from:
+  - call override (`opts[:long_term_backend]`)
+  - manager config (`manager.long_term_backend`)
+  - fallback default (`LongTermStore.ETS`)
 
 ## Deterministic behavior decisions
 - Stable IDs are derived for segments/pages/long records.

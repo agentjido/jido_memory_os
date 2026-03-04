@@ -18,14 +18,18 @@ flowchart TD
     A["Jido.MemoryOS (Facade API)"] --> B["MemoryManager (Control Plane)"]
     B --> C["Adapter.MemoryRuntime"]
     C --> D["Jido.Memory.Runtime / Stores"]
+    C --> E["LongTermStore behavior (for :long tier)"]
+    E --> E1["LongTermStore.ETS (default)"]
+    E --> E2["LongTermStore.Postgres"]
+    E --> E3["Custom backend"]
 
-    B --> E["Lifecycle + Metadata"]
-    B --> F["Retrieval Pipeline"]
-    B --> G["Governance + Safety"]
-    B --> H["Journal + Cache + Metrics"]
+    B --> F["Lifecycle + Metadata"]
+    B --> G["Retrieval Pipeline"]
+    B --> H["Governance + Safety"]
+    B --> I["Journal + Cache + Metrics"]
 
-    I["Plugin / Actions / Framework Adapters"] --> A
-    J["Migration + ReleaseController"] --> A
+    J["Plugin / Actions / Framework Adapters"] --> A
+    K["Migration + ReleaseController"] --> A
 ```
 
 ## Core modules and responsibilities
@@ -35,7 +39,9 @@ flowchart TD
 - `Jido.MemoryOS.MemoryManager`
   - Central orchestrator for queueing, scheduling, retries, policy checks, auditing, and lifecycle operations.
 - `Jido.MemoryOS.Adapter.MemoryRuntime`
-  - Normalizes options and metadata and delegates storage operations to `Jido.Memory.Runtime`.
+  - Normalizes options and metadata.
+  - Delegates short/mid storage operations to `Jido.Memory.Runtime`.
+  - Delegates long-tier operations to `Jido.MemoryOS.LongTermStore`.
 - `Jido.MemoryOS.Lifecycle` and `Jido.MemoryOS.Metadata`
   - Encodes lifecycle semantics and deterministic metadata transitions.
 - Retrieval modules (`Query`, `Planner`, `Candidate`, `Ranker`, `ContextPack`)

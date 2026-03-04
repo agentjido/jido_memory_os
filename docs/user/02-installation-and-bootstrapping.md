@@ -5,6 +5,7 @@ This project depends on:
 - `jido`
 - `jido_action`
 - `jido_memory`
+- `postgrex` (optional, only if you use `Jido.MemoryOS.LongTermStore.Postgres`)
 
 If you are embedding this library in another Mix project, add it as a dependency (path or git), then run:
 
@@ -30,7 +31,44 @@ config :jido_memory_os, Jido.MemoryOS.Config,
     short: %{store: {Jido.Memory.Store.ETS, [table: :jido_memory_os_short]}},
     mid: %{store: {Jido.Memory.Store.ETS, [table: :jido_memory_os_mid]}},
     long: %{store: {Jido.Memory.Store.ETS, [table: :jido_memory_os_long]}}
+  },
+  manager: %{
+    # :long tier always routes through LongTermStore.
+    long_term_backend: Jido.MemoryOS.LongTermStore.ETS,
+    long_term_backend_opts: []
   }
+```
+
+## Configure long-term storage
+`Jido.MemoryOS` now routes all `:long` tier operations through a `LongTermStore` backend.
+
+- Default backend: `Jido.MemoryOS.LongTermStore.ETS`
+- Built-in persistent option: `Jido.MemoryOS.LongTermStore.Postgres`
+- Custom backend: any module implementing `Jido.MemoryOS.LongTermStore`
+
+Postgres example:
+
+```elixir
+config :jido_memory_os, Jido.MemoryOS.Config,
+  manager: %{
+    long_term_backend: Jido.MemoryOS.LongTermStore.Postgres,
+    long_term_backend_opts: [
+      conn: MyApp.Postgrex,
+      schema: "public",
+      table: "jido_memory_os_long_term",
+      ensure_table?: true
+    ]
+  }
+```
+
+You can also override backend selection per call:
+
+```elixir
+Jido.MemoryOS.remember(target, attrs,
+  tier: :long,
+  long_term_backend: Jido.MemoryOS.LongTermStore.Postgres,
+  long_term_backend_opts: [conn: MyApp.Postgrex]
+)
 ```
 
 ## Start an isolated manager (tests or local sandbox)
@@ -60,3 +98,4 @@ Common options you will pass to API calls:
 - `correlation_id`: trace id propagated into metadata
 - `call_timeout`, `timeout_ms`
 - `store`, `store_opts`, `namespace` (advanced overrides)
+- `long_term_backend`, `long_term_backend_opts` (only used for `tier: :long`)
