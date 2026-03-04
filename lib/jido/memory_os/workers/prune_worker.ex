@@ -36,10 +36,11 @@ defmodule Jido.MemoryOS.Workers.PruneWorker do
   def handle_cast({:prune, target, opts}, state) do
     manager = state.manager
 
-    Task.start(fn ->
-      _ = MemoryManager.prune(target, Keyword.put(opts, :server, manager))
-      :ok
-    end)
+    {:ok, _pid} =
+      Task.start(fn ->
+        _ = MemoryManager.prune(target, Keyword.put(opts, :server, manager))
+        :ok
+      end)
 
     {:noreply, %{state | completed_jobs: state.completed_jobs + 1}}
   end

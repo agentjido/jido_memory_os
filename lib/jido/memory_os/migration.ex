@@ -12,6 +12,8 @@ defmodule Jido.MemoryOS.Migration do
   alias Jido.Memory.Runtime
   alias Jido.MemoryOS.Metadata
 
+  @dialyzer {:nowarn_function, expires_soon?: 3, older_than_days?: 3, text_size: 1}
+
   @tiers [:short, :mid, :long]
   @default_legacy_store {Jido.Memory.Store.ETS, [table: :jido_memory]}
   @default_legacy_limit 10_000
@@ -327,20 +329,16 @@ defmodule Jido.MemoryOS.Migration do
     end)
   end
 
-  @spec expires_soon?(integer() | nil, integer(), pos_integer()) :: boolean()
-  defp expires_soon?(nil, _now, _window), do: false
-  defp expires_soon?(expires_at, now, window), do: expires_at - now <= window
+  @spec expires_soon?(term(), integer(), pos_integer()) :: boolean()
+  defp expires_soon?(expires_at, now, window),
+    do: is_integer(expires_at) and expires_at - now <= window
 
-  @spec older_than_days?(integer() | nil, integer(), pos_integer()) :: boolean()
-  defp older_than_days?(nil, _now, _days), do: false
-
-  defp older_than_days?(observed_at, now, days) do
-    now - observed_at >= days * 86_400_000
-  end
+  @spec older_than_days?(term(), integer(), pos_integer()) :: boolean()
+  defp older_than_days?(observed_at, now, days),
+    do: is_integer(observed_at) and now - observed_at >= days * 86_400_000
 
   @spec text_size(term()) :: non_neg_integer()
-  defp text_size(text) when is_binary(text), do: String.length(text)
-  defp text_size(_), do: 0
+  defp text_size(text), do: if(is_binary(text), do: String.length(text), else: 0)
 
   @spec persona_keys(Record.t()) :: [String.t()]
   defp persona_keys(%Record{tags: tags}) do

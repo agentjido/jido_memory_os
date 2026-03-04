@@ -1806,14 +1806,11 @@ defmodule Jido.MemoryOS.MemoryManager do
     Map.get(details, :code) in [:upstream_error, :upstream_error_list, :runtime_exception]
   end
 
-  defp transient_runtime_error?({:runtime_exception, _exception, _stacktrace}), do: true
-  defp transient_runtime_error?({:put_failed, _reason}), do: true
-  defp transient_runtime_error?({:query_failed, _reason}), do: true
   defp transient_runtime_error?(_), do: false
 
   @spec enrich_retry_context(term(), atom(), String.t()) :: term()
   defp enrich_retry_context(%Jido.Error.ExecutionError{} = error, _operation, trace_id) do
-    details = Map.put(error.details || %{}, :trace_id, trace_id)
+    details = Map.put(error.details, :trace_id, trace_id)
     %{error | details: details}
   end
 
@@ -1832,9 +1829,12 @@ defmodule Jido.MemoryOS.MemoryManager do
     if state.policy_cache.manager.auto_consolidate do
       debounce_ms = state.policy_cache.manager.consolidation_debounce_ms
 
-      if existing = Map.get(state.pending_consolidation, namespace) do
-        Process.cancel_timer(existing.timer_ref)
-      end
+      _ =
+        if existing = Map.get(state.pending_consolidation, namespace) do
+          Process.cancel_timer(existing.timer_ref)
+        else
+          :ok
+        end
 
       dispatch_ref = make_ref()
 
@@ -2388,7 +2388,7 @@ defmodule Jido.MemoryOS.MemoryManager do
   @spec record_debug(Jido.Memory.Record.t()) :: map()
   defp record_debug(record) do
     {:ok, mem_os} = Metadata.from_record(record)
-    conflict = normalize_map(map_get(record.metadata || %{}, :mem_os_conflict, %{}))
+    conflict = normalize_map(map_get(record.metadata, :mem_os_conflict, %{}))
 
     %{
       id: record.id,
@@ -2460,8 +2460,6 @@ defmodule Jido.MemoryOS.MemoryManager do
 
   defp summarize_target(target) when is_map(target),
     do: Map.take(target, [:id, :agent_id, "id", "agent_id"])
-
-  defp summarize_target(_), do: %{}
 
   @spec push_dead_letter(state(), map()) :: state()
   defp push_dead_letter(state, entry) do
@@ -2691,15 +2689,18 @@ defmodule Jido.MemoryOS.MemoryManager do
 
     next_events = [entry | state.journal_events] |> Enum.take(state.journal_limit)
 
-    if length(next_events) == state.journal_limit and
-         length(state.journal_events) >= state.journal_limit do
-      _ = Journal.compact(state.journal_path, Enum.reverse(next_events))
-    end
+    _ =
+      if length(next_events) == state.journal_limit and
+           length(state.journal_events) >= state.journal_limit do
+        Journal.compact(state.journal_path, Enum.reverse(next_events))
+      else
+        :ok
+      end
 
     %{state | journal_events: next_events, journal_index: next_index}
   end
 
-  @spec resolve_journal_path(Config.t(), GenServer.server()) :: String.t() | nil
+  @spec resolve_journal_path(Config.t(), GenServer.server()) :: String.t()
   defp resolve_journal_path(config, server_name) do
     configured = map_get(config.manager, :journal_path)
 
@@ -2713,9 +2714,7 @@ defmodule Jido.MemoryOS.MemoryManager do
     end
   end
 
-  @spec bootstrap_journal(String.t() | nil) :: {[map()], map(), map(), [map()]}
-  defp bootstrap_journal(nil), do: {[], %{}, %{}, []}
-
+  @spec bootstrap_journal(String.t()) :: {[map()], map(), map(), [map()]}
   defp bootstrap_journal(path) do
     case Journal.load(path) do
       {:ok, events} ->
@@ -2724,9 +2723,6 @@ defmodule Jido.MemoryOS.MemoryManager do
         idempotent_results = build_idempotent_results(latest)
         replay_backlog = build_replay_backlog(latest)
         {Enum.reverse(valid_events), latest, idempotent_results, replay_backlog}
-
-      {:error, _reason} ->
-        {[], %{}, %{}, []}
     end
   end
 
@@ -2819,8 +2815,6 @@ defmodule Jido.MemoryOS.MemoryManager do
     Map.get(details, :code) in [:manager_throttled, :manager_agent_throttled]
   end
 
-  defp throttled_error?(_), do: false
-
   @spec maybe_reply(state(), GenServer.from() | nil, term()) :: state()
   defp maybe_reply(state, nil, _result), do: state
 
@@ -2881,7 +2875,7 @@ defmodule Jido.MemoryOS.MemoryManager do
 
   defp map_get(list, key, default) when is_list(list) do
     if Keyword.keyword?(list),
-      do: Keyword.get(list, key, Keyword.get(list, Atom.to_string(key), default)),
+      do: Keyword.get(list, key, default),
       else: default
   end
 

@@ -44,10 +44,11 @@ defmodule Jido.MemoryOS.Workers.RetrievalWorker do
   def handle_cast({:retrieve, target, query, opts}, state) do
     manager = state.manager
 
-    Task.start(fn ->
-      _ = MemoryManager.retrieve(target, query, Keyword.put(opts, :server, manager))
-      :ok
-    end)
+    {:ok, _pid} =
+      Task.start(fn ->
+        _ = MemoryManager.retrieve(target, query, Keyword.put(opts, :server, manager))
+        :ok
+      end)
 
     {:noreply, %{state | completed_jobs: state.completed_jobs + 1}}
   end

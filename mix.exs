@@ -19,7 +19,7 @@ defmodule JidoMemoryOs.MixProject do
       package: package(),
       docs: docs(),
       dialyzer: [
-        flags: [:error_handling, :underspecs, :unknown, :unmatched_returns],
+        flags: [:error_handling, :unknown, :unmatched_returns],
         plt_add_apps: [:mix]
       ],
       deps: deps()

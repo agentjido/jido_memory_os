@@ -39,10 +39,11 @@ defmodule Jido.MemoryOS.Workers.ConsolidationWorker do
   def handle_cast({:schedule, target, opts}, state) do
     manager = state.manager
 
-    Task.start(fn ->
-      _ = MemoryManager.consolidate(target, Keyword.put(opts, :server, manager))
-      :ok
-    end)
+    {:ok, _pid} =
+      Task.start(fn ->
+        _ = MemoryManager.consolidate(target, Keyword.put(opts, :server, manager))
+        :ok
+      end)
 
     {:noreply, %{state | completed_jobs: state.completed_jobs + 1}}
   end
