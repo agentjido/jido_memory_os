@@ -50,6 +50,59 @@ defmodule Jido.MemoryOS.ErrorMapping do
           details: details(operation, reason, %{code: :invalid_tier, tier: tier})
         )
 
+      {:invalid_long_term_backend, backend} ->
+        Jido.Error.validation_error("long-term backend must be a module",
+          kind: :config,
+          subject: :long_term_backend,
+          details:
+            details(operation, reason, %{code: :invalid_long_term_backend, backend: backend})
+        )
+
+      {:invalid_long_term_backend_callbacks, module, missing} ->
+        Jido.Error.validation_error("long-term backend is missing required callbacks",
+          kind: :config,
+          subject: module,
+          details:
+            details(operation, reason, %{
+              code: :invalid_long_term_backend_callbacks,
+              missing_callbacks: missing
+            })
+        )
+
+      {:missing_long_term_backend_module, module, reason_value} ->
+        Jido.Error.validation_error("long-term backend module could not be loaded",
+          kind: :config,
+          subject: module,
+          details:
+            details(operation, reason, %{
+              code: :missing_long_term_backend_module,
+              load_reason: reason_value
+            })
+        )
+
+      :invalid_long_term_backend_opts ->
+        Jido.Error.validation_error("long-term backend options must be a keyword list",
+          kind: :config,
+          subject: :long_term_backend_opts,
+          details: details(operation, reason, %{code: :invalid_long_term_backend_opts})
+        )
+
+      {:missing_long_term_backend_option, key} ->
+        Jido.Error.validation_error("long-term backend context is missing required option",
+          kind: :config,
+          subject: key,
+          details:
+            details(operation, reason, %{
+              code: :missing_long_term_backend_option,
+              missing_option: key
+            })
+        )
+
+      :invalid_long_term_backend_operation ->
+        Jido.Error.internal_error("long-term backend operation is unsupported",
+          details: details(operation, reason, %{code: :invalid_long_term_backend_operation})
+        )
+
       :not_found ->
         Jido.Error.execution_error("memory record not found",
           phase: :execution,
@@ -119,6 +172,14 @@ defmodule Jido.MemoryOS.ErrorMapping do
               code: :runtime_incompatible,
               missing_capabilities: missing
             })
+        )
+
+      {:missing_runtime_module, module, reason_value} ->
+        Jido.Error.validation_error("jido_memory runtime module could not be loaded",
+          kind: :config,
+          subject: module,
+          details:
+            details(operation, reason, %{code: :runtime_incompatible, load_reason: reason_value})
         )
 
       {:unsupported_jido_memory_version, version, requirement} ->
