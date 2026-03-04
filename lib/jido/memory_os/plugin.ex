@@ -116,9 +116,6 @@ defmodule Jido.MemoryOS.Plugin do
       false ->
         {:ok, :continue}
 
-      {:error, reason} ->
-        maybe_capture_error(reason, capture)
-
       _other ->
         {:ok, :continue}
     end
@@ -420,7 +417,7 @@ defmodule Jido.MemoryOS.Plugin do
             map_get(decision.attrs, :source),
             normalize_non_empty_string(
               map_get(capture, :source),
-              signal.source || @default_capture_source
+              signal.source
             )
           ),
         observed_at: map_get(decision.attrs, :observed_at, signal_time_ms(signal.time)),
@@ -583,14 +580,12 @@ defmodule Jido.MemoryOS.Plugin do
       map_get(data, :conversation_id) ||
       map_get(data, :thread_id) ||
       map_get(data, :session_id) ||
-      map_get(signal.extensions || %{}, :chain_id) ||
+      map_get(signal.extensions, :chain_id) ||
       normalize_optional_string(signal.subject)
   end
 
   @spec signal_time_ms(term()) :: integer()
   defp signal_time_ms(nil), do: System.system_time(:millisecond)
-
-  defp signal_time_ms(time) when is_integer(time), do: time
 
   defp signal_time_ms(time) when is_binary(time) do
     case DateTime.from_iso8601(time) do
@@ -598,8 +593,6 @@ defmodule Jido.MemoryOS.Plugin do
       _ -> System.system_time(:millisecond)
     end
   end
-
-  defp signal_time_ms(_time), do: System.system_time(:millisecond)
 
   @spec pick_rule_fields(map(), [atom()]) :: map()
   defp pick_rule_fields(rule, keys) do

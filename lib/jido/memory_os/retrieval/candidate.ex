@@ -50,7 +50,7 @@ defmodule Jido.MemoryOS.Retrieval.Candidate do
 
     topic_keys = extract_topic_keys(record.tags)
     fact_key = Lifecycle.fact_key(record)
-    observed_at = record.observed_at || now
+    observed_at = record.observed_at
     recency = normalize_recency(observed_at, now)
 
     %{
@@ -117,8 +117,6 @@ defmodule Jido.MemoryOS.Retrieval.Candidate do
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
   end
-
-  defp normalize_tags(_), do: []
 
   @spec normalize_recency(integer(), integer()) :: number()
   defp normalize_recency(observed_at, now) do

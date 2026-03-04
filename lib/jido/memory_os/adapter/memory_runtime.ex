@@ -356,7 +356,13 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
     end
   end
 
-  @spec call_backend(atom(), module(), map() | struct(), term(), keyword()) ::
+  @spec call_backend(
+          :remember | :get | :recall | :forget | :prune,
+          module(),
+          map() | struct(),
+          term(),
+          keyword()
+        ) ::
           {:ok, term()} | {:error, term()}
   defp call_backend(:remember, backend, target, attrs, backend_opts) do
     call_runtime(:remember, fn -> backend.remember(target, attrs, backend_opts) end)
@@ -377,9 +383,6 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
   defp call_backend(:prune, backend, target, _payload, backend_opts) do
     call_runtime(:prune, fn -> backend.prune(target, backend_opts) end)
   end
-
-  defp call_backend(_operation, _backend, _target, _payload, _backend_opts),
-    do: {:error, :invalid_long_term_backend_operation}
 
   @spec normalize_tier(term()) :: {:ok, Config.tier()} | {:error, term()}
   defp normalize_tier(:short), do: {:ok, :short}

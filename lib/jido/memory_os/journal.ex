@@ -7,13 +7,13 @@ defmodule Jido.MemoryOS.Journal do
 
   @type event :: map()
 
-  @spec load(String.t() | nil) :: {:ok, [event()]} | {:error, term()}
+  @spec load(String.t() | nil) :: {:ok, [event()]}
   def load(nil), do: {:ok, []}
 
   def load(path) when is_binary(path) do
     if File.exists?(path) do
       path
-      |> File.stream!([], :line)
+      |> File.stream!(:line, [])
       |> Enum.reduce_while({:ok, []}, fn line, {:ok, acc} ->
         with {:ok, event} <- decode_line(line) do
           {:cont, {:ok, [event | acc]}}
@@ -23,7 +23,6 @@ defmodule Jido.MemoryOS.Journal do
       end)
       |> case do
         {:ok, events} -> {:ok, Enum.reverse(events)}
-        {:error, reason} -> {:error, reason}
       end
     else
       {:ok, []}
@@ -93,7 +92,6 @@ defmodule Jido.MemoryOS.Journal do
         end
       else
         :error -> {:error, :invalid_journal_encoding}
-        error -> {:error, error}
       end
     end
   end

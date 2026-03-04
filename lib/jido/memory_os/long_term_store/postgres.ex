@@ -445,9 +445,9 @@ defmodule Jido.MemoryOS.LongTermStore.Postgres do
     {clauses ++ [clause], params ++ [values], index + 1}
   end
 
-  @spec add_text_filter([String.t()], list(), pos_integer(), String.t() | nil) ::
+  @spec add_text_filter([String.t()], list(), pos_integer(), String.t()) ::
           {[String.t()], list(), pos_integer()}
-  defp add_text_filter(clauses, params, index, nil), do: {clauses, params, index}
+  defp add_text_filter(clauses, params, index, ""), do: {clauses, params, index}
 
   defp add_text_filter(clauses, params, index, text_contains) do
     escaped = "%" <> escape_like(text_contains) <> "%"
@@ -455,10 +455,8 @@ defmodule Jido.MemoryOS.LongTermStore.Postgres do
     {clauses ++ [clause], params ++ [escaped], index + 1}
   end
 
-  @spec add_range_filter([String.t()], list(), pos_integer(), String.t(), integer() | nil) ::
+  @spec add_range_filter([String.t()], list(), pos_integer(), String.t(), integer()) ::
           {[String.t()], list(), pos_integer()}
-  defp add_range_filter(clauses, params, index, _template, nil), do: {clauses, params, index}
-
   defp add_range_filter(clauses, params, index, template, value) do
     clause = String.replace(template, "%s", "$#{index}")
     {clauses ++ [clause], params ++ [value], index + 1}

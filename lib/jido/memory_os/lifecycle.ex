@@ -288,7 +288,7 @@ defmodule Jido.MemoryOS.Lifecycle do
       ) do
     {:ok, page_mem_os} = Metadata.from_record(page_record)
     long_id = "long_" <> stable_id({fact_key, page_record.id})
-    observed_at = page_record.observed_at || now
+    observed_at = page_record.observed_at
 
     metadata_patch = %{
       "mem_os_conflict" => %{
@@ -310,7 +310,7 @@ defmodule Jido.MemoryOS.Lifecycle do
           page_id: page_record.id,
           provenance: page_record.content
         },
-        tags: Enum.uniq((page_record.tags || []) ++ ["memory_os:long", "fact_key:" <> fact_key]),
+        tags: Enum.uniq(page_record.tags ++ ["memory_os:long", "fact_key:" <> fact_key]),
         metadata: metadata_patch,
         observed_at: observed_at,
         expires_at: observed_at + ttl_ms
@@ -512,27 +512,11 @@ defmodule Jido.MemoryOS.Lifecycle do
 
   defp normalize_map(_), do: %{}
 
-  @spec map_get(map(), atom() | String.t(), term()) :: term()
+  @spec map_get(map(), atom(), term()) :: term()
   defp map_get(map, key, default \\ nil)
 
   defp map_get(map, key, default) when is_atom(key) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-  end
-
-  defp map_get(map, key, default) when is_binary(key) do
-    case Map.fetch(map, key) do
-      {:ok, value} ->
-        value
-
-      :error ->
-        atom_key =
-          Enum.find(Map.keys(map), fn
-            entry when is_atom(entry) -> Atom.to_string(entry) == key
-            _ -> false
-          end)
-
-        if atom_key, do: Map.get(map, atom_key, default), else: default
-    end
   end
 
   @spec maybe_put(map(), atom(), term()) :: map()

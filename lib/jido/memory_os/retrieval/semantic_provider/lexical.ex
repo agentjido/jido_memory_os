@@ -26,18 +26,24 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
     {:ok, scores}
   end
 
-  @spec lexical_similarity(map(), String.t() | nil, MapSet.t(String.t())) :: number()
+  @spec lexical_similarity(map(), String.t() | nil, [String.t()]) :: number()
   defp lexical_similarity(_candidate, nil, _query_tokens), do: 0.5
 
   defp lexical_similarity(candidate, query_text, query_tokens) do
     candidate_tokens = tokenize(candidate.normalized_text)
+    query_lookup = token_lookup(query_tokens)
+    unique_candidate_tokens = Enum.uniq(candidate_tokens)
 
     overlap_score =
-      if MapSet.size(query_tokens) == 0 do
+      if query_tokens == [] do
         0.0
       else
-        intersection = MapSet.intersection(query_tokens, candidate_tokens)
-        MapSet.size(intersection) / MapSet.size(query_tokens)
+        overlap_count =
+          Enum.count(unique_candidate_tokens, fn token ->
+            Map.has_key?(query_lookup, token)
+          end)
+
+        overlap_count / length(query_tokens)
       end
 
     phrase_match =
@@ -51,16 +57,19 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
     clamp(Float.round(0.65 * overlap_score + 0.35 * phrase_match, 4), 0.0, 1.0)
   end
 
-  @spec tokenize(String.t() | nil) :: MapSet.t(String.t())
-  defp tokenize(nil), do: MapSet.new()
+  @spec tokenize(String.t() | nil) :: [String.t()]
+  defp tokenize(nil), do: []
 
   defp tokenize(text) do
     text
     |> String.downcase()
     |> String.split(~r/[^\p{L}\p{N}_]+/u, trim: true)
     |> Enum.reject(&(&1 == ""))
-    |> MapSet.new()
+    |> Enum.uniq()
   end
+
+  @spec token_lookup([String.t()]) :: %{optional(String.t()) => true}
+  defp token_lookup(tokens), do: Map.new(tokens, &{&1, true})
 
   @spec clamp(number(), number(), number()) :: number()
   defp clamp(value, min_value, _max_value) when value < min_value, do: min_value
