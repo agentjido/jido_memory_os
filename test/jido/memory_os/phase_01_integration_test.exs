@@ -27,6 +27,7 @@ defmodule Jido.MemoryOS.Phase01IntegrationTest do
     assert config.namespace_template == "agent:%{agent_id}:%{tier}"
     assert is_map(config.tiers)
     assert is_map(config.retrieval)
+    assert config.manager.long_term_backend == Jido.MemoryOS.LongTermStore.ETS
   end
 
   test "adapter smoke path supports remember/retrieve/forget/prune with wrapped runtime" do
@@ -89,6 +90,25 @@ defmodule Jido.MemoryOS.Phase01IntegrationTest do
     assert [{{_, _}, _}] = :ets.lookup(records_table, {record.namespace, record.id})
   end
 
+  test "long tier uses built-in long-term backend by default" do
+    target = %{id: "phase1-long-default-agent"}
+    opts = [tier: :long, correlation_id: "phase1-long-default", tiers: tier_store_overrides()]
+
+    assert {:ok, record} =
+             Jido.MemoryOS.remember(
+               target,
+               %{class: :semantic, kind: :fact, text: "phase1 long default"},
+               opts
+             )
+
+    assert record.namespace == "agent:phase1-long-default-agent:long"
+
+    assert {:ok, results} =
+             Jido.MemoryOS.retrieve(target, %{text_contains: "phase1 long default"}, opts)
+
+    assert Enum.any?(results, &(&1.id == record.id))
+  end
+
   test "metadata encoder/decoder roundtrip preserves lifecycle fields with defaults" do
     attrs = %{metadata: %{"source" => "test"}}
 
@@ -141,6 +161,48 @@ defmodule Jido.MemoryOS.Phase01IntegrationTest do
     def remember(_target, _attrs, _opts), do: {:ok, :noop}
   end
 
+  defmodule RecordingLongTermStore do
+    @behaviour Jido.MemoryOS.LongTermStore
+
+    alias Jido.MemoryOS.LongTermStore.ETS
+
+    @impl true
+    def remember(target, attrs, opts) do
+      notify(opts, :remember)
+      ETS.remember(target, attrs, opts)
+    end
+
+    @impl true
+    def get(target, id, opts) do
+      notify(opts, :get)
+      ETS.get(target, id, opts)
+    end
+
+    @impl true
+    def recall(target, query, opts) do
+      notify(opts, :recall)
+      ETS.recall(target, query, opts)
+    end
+
+    @impl true
+    def forget(target, id, opts) do
+      notify(opts, :forget)
+      ETS.forget(target, id, opts)
+    end
+
+    @impl true
+    def prune(target, opts) do
+      notify(opts, :prune)
+      ETS.prune(target, opts)
+    end
+
+    defp notify(opts, operation) do
+      if pid = Keyword.get(opts, :test_pid) do
+        send(pid, {:long_term_backend_called, operation, Keyword.get(opts, :tier)})
+      end
+    end
+  end
+
   test "compatibility guards detect missing runtime capabilities" do
     assert {:ok, _version} = Compatibility.validate_jido_memory_version()
     assert :ok = Compatibility.validate_required_capabilities(Jido.Memory.Runtime)
@@ -167,6 +229,61 @@ defmodule Jido.MemoryOS.Phase01IntegrationTest do
              Jido.MemoryOS.remember(target, %{class: :semantic, text: "x"}, tier: :unknown)
 
     assert tier_error.subject == :tier
+  end
+
+  test "long tier routes through configured long-term backend behavior" do
+    target = %{id: "phase1-long-custom-agent"}
+
+    opts = [
+      tier: :long,
+      correlation_id: "phase1-long-custom",
+      tiers: tier_store_overrides(),
+      long_term_backend: RecordingLongTermStore,
+      long_term_backend_opts: [test_pid: self()]
+    ]
+
+    assert {:ok, record} =
+             Jido.MemoryOS.remember(
+               target,
+               %{class: :semantic, kind: :fact, text: "phase1 long custom"},
+               opts
+             )
+
+    assert_receive {:long_term_backend_called, :remember, :long}
+
+    assert {:ok, results} =
+             Jido.MemoryOS.retrieve(target, %{text_contains: "phase1 long custom"}, opts)
+
+    assert Enum.any?(results, &(&1.id == record.id))
+    assert_receive {:long_term_backend_called, :recall, :long}
+
+    assert {:ok, true} = Jido.MemoryOS.forget(target, record.id, opts)
+    assert_receive {:long_term_backend_called, :forget, :long}
+
+    assert {:ok, pruned} = Jido.MemoryOS.prune(target, opts)
+    assert is_integer(pruned)
+    assert_receive {:long_term_backend_called, :prune, :long}
+  end
+
+  test "long tier backend callback contract errors map to config validation errors" do
+    target = %{id: "phase1-long-contract-agent"}
+
+    opts = [
+      tier: :long,
+      correlation_id: "phase1-long-contract",
+      tiers: tier_store_overrides(),
+      long_term_backend: IncompleteRuntime
+    ]
+
+    assert {:error, %Jido.Error.ValidationError{} = error} =
+             Jido.MemoryOS.remember(
+               target,
+               %{class: :semantic, kind: :fact, text: "phase1 invalid backend"},
+               opts
+             )
+
+    assert error.kind == :config
+    assert error.subject == IncompleteRuntime
   end
 
   defp tier_store_overrides do

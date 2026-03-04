@@ -54,7 +54,9 @@ defmodule Jido.MemoryOS.Config do
     :query_cache_max_entries,
     :journal_path,
     :journal_limit,
-    :replay_on_start
+    :replay_on_start,
+    :long_term_backend,
+    :long_term_backend_opts
   ]
   @governance_keys [:policy, :approvals, :audit, :retention, :masking]
 
@@ -126,7 +128,9 @@ defmodule Jido.MemoryOS.Config do
       query_cache_max_entries: 512,
       journal_path: nil,
       journal_limit: 2_000,
-      replay_on_start: true
+      replay_on_start: true,
+      long_term_backend: Jido.MemoryOS.LongTermStore.ETS,
+      long_term_backend_opts: []
     },
     governance: %{
       policy: %{
@@ -926,6 +930,28 @@ defmodule Jido.MemoryOS.Config do
         @defaults.manager.replay_on_start
       )
 
+    long_term_backend =
+      map_get(normalized, :long_term_backend, @defaults.manager.long_term_backend)
+
+    {long_term_backend, errors} =
+      validate_optional_module(
+        long_term_backend,
+        path ++ [:long_term_backend],
+        errors,
+        @defaults.manager.long_term_backend
+      )
+
+    long_term_backend_opts =
+      map_get(normalized, :long_term_backend_opts, @defaults.manager.long_term_backend_opts)
+
+    {long_term_backend_opts, errors} =
+      validate_keyword_list(
+        long_term_backend_opts,
+        path ++ [:long_term_backend_opts],
+        errors,
+        @defaults.manager.long_term_backend_opts
+      )
+
     {%{
        queue_max_depth: queue_max_depth,
        queue_per_agent: queue_per_agent,
@@ -947,7 +973,9 @@ defmodule Jido.MemoryOS.Config do
        query_cache_max_entries: query_cache_max_entries,
        journal_path: journal_path,
        journal_limit: journal_limit,
-       replay_on_start: replay_on_start
+       replay_on_start: replay_on_start,
+       long_term_backend: long_term_backend,
+       long_term_backend_opts: long_term_backend_opts
      }, errors}
   end
 
@@ -1313,6 +1341,31 @@ defmodule Jido.MemoryOS.Config do
 
   defp validate_boolean(value, path, errors, fallback) do
     {fallback, [error(path, :invalid_type, "must be a boolean", value) | errors]}
+  end
+
+  @spec validate_optional_module(term(), [atom()], [ConfigError.t()], module() | nil) ::
+          {module() | nil, [ConfigError.t()]}
+  defp validate_optional_module(nil, _path, errors, _fallback), do: {nil, errors}
+
+  defp validate_optional_module(value, _path, errors, _fallback) when is_atom(value),
+    do: {value, errors}
+
+  defp validate_optional_module(value, path, errors, fallback) do
+    {fallback, [error(path, :invalid_type, "must be nil or a module atom", value) | errors]}
+  end
+
+  @spec validate_keyword_list(term(), [atom()], [ConfigError.t()], keyword()) ::
+          {keyword(), [ConfigError.t()]}
+  defp validate_keyword_list(value, path, errors, fallback) when is_list(value) do
+    if Keyword.keyword?(value) do
+      {value, errors}
+    else
+      {fallback, [error(path, :invalid_type, "must be a keyword list", value) | errors]}
+    end
+  end
+
+  defp validate_keyword_list(value, path, errors, fallback) do
+    {fallback, [error(path, :invalid_type, "must be a keyword list", value) | errors]}
   end
 
   @spec validate_string_list(term(), [atom()], [ConfigError.t()], [String.t()]) ::

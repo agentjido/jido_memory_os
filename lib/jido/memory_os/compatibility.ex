@@ -97,16 +97,22 @@ defmodule Jido.MemoryOS.Compatibility do
   """
   @spec validate_required_capabilities(module()) :: :ok | {:error, term()}
   def validate_required_capabilities(module) when is_atom(module) do
-    missing =
-      @required_runtime_functions
-      |> Enum.reject(fn {function_name, arity} ->
-        function_exported?(module, function_name, arity)
-      end)
+    case Code.ensure_loaded(module) do
+      {:module, _loaded_module} ->
+        missing =
+          @required_runtime_functions
+          |> Enum.reject(fn {function_name, arity} ->
+            function_exported?(module, function_name, arity)
+          end)
 
-    if missing == [] do
-      :ok
-    else
-      {:error, {:missing_runtime_capabilities, module, missing}}
+        if missing == [] do
+          :ok
+        else
+          {:error, {:missing_runtime_capabilities, module, missing}}
+        end
+
+      {:error, reason} ->
+        {:error, {:missing_runtime_module, module, reason}}
     end
   end
 

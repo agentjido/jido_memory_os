@@ -7,6 +7,9 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
   alias Jido.Memory.Store
   alias Jido.MemoryOS.{Config, ErrorMapping, Metadata}
 
+  @default_long_term_backend Jido.MemoryOS.LongTermStore.ETS
+  @long_term_backend_callbacks [remember: 3, get: 3, recall: 3, forget: 3, prune: 2]
+
   @type context :: %{
           config: Config.t(),
           tier: Config.tier(),
@@ -28,7 +31,14 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
     with {:ok, context} <- resolve_context(target, opts),
          {:ok, attrs} <- prepare_attrs(attrs, context, operation, opts),
          {:ok, record} <-
-           call_runtime(operation, fn -> Runtime.remember(target, attrs, context.runtime_opts) end) do
+           execute_store_operation(
+             operation,
+             context,
+             target,
+             attrs,
+             opts,
+             fn -> Runtime.remember(target, attrs, context.runtime_opts) end
+           ) do
       {:ok, record}
     else
       {:error, reason} -> {:error, ErrorMapping.from_reason(reason, operation)}
@@ -45,7 +55,14 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
 
     with {:ok, context} <- resolve_context(target, opts),
          {:ok, record} <-
-           call_runtime(operation, fn -> Runtime.get(target, id, context.runtime_opts) end) do
+           execute_store_operation(
+             operation,
+             context,
+             target,
+             id,
+             opts,
+             fn -> Runtime.get(target, id, context.runtime_opts) end
+           ) do
       {:ok, record}
     else
       {:error, reason} -> {:error, ErrorMapping.from_reason(reason, operation)}
@@ -62,7 +79,15 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
 
     with {:ok, context} <- resolve_context(target, opts),
          {:ok, query_map} <- prepare_query(query, context),
-         {:ok, records} <- call_runtime(operation, fn -> Runtime.recall(target, query_map) end) do
+         {:ok, records} <-
+           execute_store_operation(
+             operation,
+             context,
+             target,
+             query_map,
+             opts,
+             fn -> Runtime.recall(target, query_map) end
+           ) do
       {:ok, records}
     else
       {:error, reason} -> {:error, ErrorMapping.from_reason(reason, operation)}
@@ -79,7 +104,14 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
 
     with {:ok, context} <- resolve_context(target, opts),
          {:ok, deleted?} <-
-           call_runtime(operation, fn -> Runtime.forget(target, id, context.runtime_opts) end) do
+           execute_store_operation(
+             operation,
+             context,
+             target,
+             id,
+             opts,
+             fn -> Runtime.forget(target, id, context.runtime_opts) end
+           ) do
       {:ok, deleted?}
     else
       {:error, reason} -> {:error, ErrorMapping.from_reason(reason, operation)}
@@ -96,7 +128,14 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
 
     with {:ok, context} <- resolve_context(target, opts),
          {:ok, count} <-
-           call_runtime(operation, fn -> Runtime.prune_expired(target, context.runtime_opts) end) do
+           execute_store_operation(
+             operation,
+             context,
+             target,
+             :none,
+             opts,
+             fn -> Runtime.prune_expired(target, context.runtime_opts) end
+           ) do
       {:ok, count}
     else
       {:error, reason} -> {:error, ErrorMapping.from_reason(reason, operation)}
@@ -229,6 +268,119 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
     error -> {:error, {:runtime_exception, error, __STACKTRACE__}}
   end
 
+  @spec execute_store_operation(
+          atom(),
+          context(),
+          map() | struct(),
+          term(),
+          keyword(),
+          (-> {:ok, term()} | {:error, term()})
+        ) :: {:ok, term()} | {:error, term()}
+  defp execute_store_operation(operation, context, target, payload, opts, fallback_fun) do
+    case context.tier do
+      :long ->
+        with {:ok, backend, backend_opts} <- resolve_long_term_backend(context, opts) do
+          call_backend(operation, backend, target, payload, backend_opts)
+        end
+
+      _ ->
+        call_runtime(operation, fallback_fun)
+    end
+  end
+
+  @spec resolve_long_term_backend(context(), keyword()) ::
+          {:ok, module(), keyword()} | {:error, term()}
+  defp resolve_long_term_backend(context, opts) do
+    configured_backend =
+      map_get(context.config.manager, :long_term_backend, @default_long_term_backend)
+
+    backend =
+      case Keyword.fetch(opts, :long_term_backend) do
+        {:ok, nil} -> configured_backend
+        {:ok, value} -> value
+        :error -> configured_backend
+      end
+      |> Kernel.||(@default_long_term_backend)
+
+    cond do
+      is_atom(backend) ->
+        with :ok <- validate_long_term_backend(backend),
+             {:ok, backend_opts} <- long_term_backend_opts(context, opts) do
+          {:ok, backend, backend_opts}
+        end
+
+      true ->
+        {:error, {:invalid_long_term_backend, backend}}
+    end
+  end
+
+  @spec validate_long_term_backend(module()) :: :ok | {:error, term()}
+  defp validate_long_term_backend(module) when is_atom(module) do
+    case Code.ensure_loaded(module) do
+      {:module, _loaded_module} ->
+        missing =
+          Enum.reject(@long_term_backend_callbacks, fn {function_name, arity} ->
+            function_exported?(module, function_name, arity)
+          end)
+
+        if missing == [] do
+          :ok
+        else
+          {:error, {:invalid_long_term_backend_callbacks, module, missing}}
+        end
+
+      {:error, reason} ->
+        {:error, {:missing_long_term_backend_module, module, reason}}
+    end
+  end
+
+  @spec long_term_backend_opts(context(), keyword()) :: {:ok, keyword()} | {:error, term()}
+  defp long_term_backend_opts(context, opts) do
+    configured = map_get(context.config.manager, :long_term_backend_opts, [])
+    overrides = Keyword.get(opts, :long_term_backend_opts, [])
+
+    with true <- keyword_list?(configured),
+         true <- keyword_list?(overrides) do
+      base = [
+        namespace: context.namespace,
+        store: context.store,
+        tier: context.tier,
+        correlation_id: context.correlation_id,
+        now: context.now,
+        config: context.config
+      ]
+
+      {:ok, base |> Keyword.merge(configured) |> Keyword.merge(overrides)}
+    else
+      false -> {:error, :invalid_long_term_backend_opts}
+    end
+  end
+
+  @spec call_backend(atom(), module(), map() | struct(), term(), keyword()) ::
+          {:ok, term()} | {:error, term()}
+  defp call_backend(:remember, backend, target, attrs, backend_opts) do
+    call_runtime(:remember, fn -> backend.remember(target, attrs, backend_opts) end)
+  end
+
+  defp call_backend(:get, backend, target, id, backend_opts) do
+    call_runtime(:get, fn -> backend.get(target, id, backend_opts) end)
+  end
+
+  defp call_backend(:recall, backend, target, query, backend_opts) do
+    call_runtime(:recall, fn -> backend.recall(target, query, backend_opts) end)
+  end
+
+  defp call_backend(:forget, backend, target, id, backend_opts) do
+    call_runtime(:forget, fn -> backend.forget(target, id, backend_opts) end)
+  end
+
+  defp call_backend(:prune, backend, target, _payload, backend_opts) do
+    call_runtime(:prune, fn -> backend.prune(target, backend_opts) end)
+  end
+
+  defp call_backend(_operation, _backend, _target, _payload, _backend_opts),
+    do: {:error, :invalid_long_term_backend_operation}
+
   @spec normalize_tier(term()) :: {:ok, Config.tier()} | {:error, term()}
   defp normalize_tier(:short), do: {:ok, :short}
   defp normalize_tier(:mid), do: {:ok, :mid}
@@ -268,6 +420,10 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
   @spec normalize_opts(term()) :: keyword()
   defp normalize_opts(opts) when is_list(opts), do: opts
   defp normalize_opts(_opts), do: []
+
+  @spec keyword_list?(term()) :: boolean()
+  defp keyword_list?(value) when is_list(value), do: Keyword.keyword?(value)
+  defp keyword_list?(_), do: false
 
   @spec normalize_map(term()) :: map()
   defp normalize_map(%{} = map), do: map
