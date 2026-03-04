@@ -75,7 +75,7 @@ flowchart TD
   - retention enforcement
   - redaction/masking
 - Jido integrations:
-  - plugin routes (`memory_os.remember|retrieve|forget|consolidate`)
+  - plugin routes (`memory_os.remember|retrieve|forget|consolidate|pre_turn|post_turn`)
   - action modules
   - framework adapters
 - Phase 8 rollout/migration modules:

@@ -238,7 +238,7 @@ defmodule Jido.MemoryOS.Lifecycle do
     {:ok, mem_os} = Metadata.from_record(page_record)
     heat_component = clamp(mem_os.heat, 0.0, 1.0)
     recurrence_component = clamp(recurrence_count / 3, 0.0, 1.0)
-    persona_component = if length(mem_os.persona_keys) > 0, do: 1.0, else: 0.0
+    persona_component = if mem_os.persona_keys != [], do: 1.0, else: 0.0
 
     score =
       Float.round(

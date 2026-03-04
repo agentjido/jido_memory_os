@@ -1,5 +1,7 @@
 require Jido.MemoryOS.Actions.Consolidate
 require Jido.MemoryOS.Actions.Forget
+require Jido.MemoryOS.Actions.PostTurn
+require Jido.MemoryOS.Actions.PreTurn
 require Jido.MemoryOS.Actions.Remember
 require Jido.MemoryOS.Actions.Retrieve
 
@@ -7,13 +9,23 @@ defmodule Jido.MemoryOS.Plugin do
   @moduledoc """
   MemoryOS plugin entrypoint for Jido agents.
 
-  Phase 5 adds:
+  Plugin capabilities include:
   - explicit remember/retrieve/forget/consolidate routes
+  - framework adapter routes (`pre_turn`, `post_turn`) with configurable defaults
   - robust plugin state mount/checkpoint/restore behavior
   - signal capture with exact/wildcard matching and rule-based overrides
   """
 
-  alias Jido.MemoryOS.Actions.{Consolidate, Forget, Remember, Retrieve}
+  alias Jido.MemoryOS.Actions.{
+    AdapterSupport,
+    Consolidate,
+    Forget,
+    PostTurn,
+    PreTurn,
+    Remember,
+    Retrieve
+  }
+
   alias Jido.MemoryOS.ErrorMapping
   alias Jido.Signal
 
@@ -28,7 +40,8 @@ defmodule Jido.MemoryOS.Plugin do
                   config: Zoi.map() |> Zoi.default(%{}),
                   bindings: Zoi.map() |> Zoi.default(%{}),
                   defaults: Zoi.map() |> Zoi.default(%{}),
-                  capture: Zoi.map() |> Zoi.default(%{})
+                  capture: Zoi.map() |> Zoi.default(%{}),
+                  framework: Zoi.map() |> Zoi.default(%{})
                 })
 
   @config_schema Zoi.object(%{
@@ -52,18 +65,22 @@ defmodule Jido.MemoryOS.Plugin do
                    capture_namespace: Zoi.string() |> Zoi.nullable() |> Zoi.optional(),
                    capture_store: Zoi.any() |> Zoi.optional(),
                    capture_store_opts: Zoi.any() |> Zoi.default([]),
-                   include_signal_metadata: Zoi.boolean() |> Zoi.default(true)
+                   include_signal_metadata: Zoi.boolean() |> Zoi.default(true),
+                   framework_adapter: Zoi.any() |> Zoi.optional(),
+                   framework_adapter_opts: Zoi.any() |> Zoi.default([])
                  })
 
   use Jido.Plugin,
     name: "memory_os",
     state_key: :__memory_os__,
-    actions: [Remember, Retrieve, Forget, Consolidate],
+    actions: [Remember, Retrieve, Forget, Consolidate, PreTurn, PostTurn],
     signal_routes: [
       {"remember", Remember},
       {"retrieve", Retrieve},
       {"forget", Forget},
-      {"consolidate", Consolidate}
+      {"consolidate", Consolidate},
+      {"pre_turn", PreTurn},
+      {"post_turn", PostTurn}
     ],
     schema: @state_schema,
     config_schema: @config_schema,
@@ -134,7 +151,8 @@ defmodule Jido.MemoryOS.Plugin do
       config: normalize_map(map_get(config_map, :config, %{})),
       bindings: normalize_manager_state(config_map),
       defaults: normalize_defaults_state(config_map, base_tier),
-      capture: normalize_capture_state(config_map, base_tier)
+      capture: normalize_capture_state(config_map, base_tier),
+      framework: normalize_framework_state(config_map)
     }
   end
 
@@ -155,7 +173,8 @@ defmodule Jido.MemoryOS.Plugin do
             map_get(state_map, :bindings, map_get(state_map, :manager, %{}))
           ),
         defaults: normalize_defaults_state(map_get(state_map, :defaults, %{}), base_tier),
-        capture: normalize_capture_state(map_get(state_map, :capture, %{}), base_tier)
+        capture: normalize_capture_state(map_get(state_map, :capture, %{}), base_tier),
+        framework: normalize_framework_state(map_get(state_map, :framework, state_map))
       }
     else
       normalize_state_from_config(state_map)
@@ -167,7 +186,9 @@ defmodule Jido.MemoryOS.Plugin do
     Map.has_key?(state_map, :defaults) or
       Map.has_key?(state_map, "defaults") or
       Map.has_key?(state_map, :capture) or
-      Map.has_key?(state_map, "capture")
+      Map.has_key?(state_map, "capture") or
+      Map.has_key?(state_map, :framework) or
+      Map.has_key?(state_map, "framework")
   end
 
   @spec normalize_manager_state(map() | keyword() | term()) :: map()
@@ -236,6 +257,21 @@ defmodule Jido.MemoryOS.Plugin do
       store: map_get(map, :capture_store, map_get(map, :store)),
       store_opts:
         normalize_keyword(map_get(map, :capture_store_opts, map_get(map, :store_opts, [])))
+    }
+  end
+
+  @spec normalize_framework_state(map() | keyword() | term()) :: map()
+  defp normalize_framework_state(input) do
+    map = normalize_map(input)
+
+    %{
+      adapter:
+        map_get(
+          map,
+          :framework_adapter,
+          map_get(map, :adapter, AdapterSupport.default_adapter())
+        ),
+      opts: normalize_keyword(map_get(map, :framework_adapter_opts, map_get(map, :opts, [])))
     }
   end
 
@@ -462,7 +498,8 @@ defmodule Jido.MemoryOS.Plugin do
   defp valid_plugin_state?(state) do
     is_map(map_get(state, :bindings, map_get(state, :manager, %{}))) and
       is_map(map_get(state, :defaults, %{})) and
-      is_map(map_get(state, :capture, %{}))
+      is_map(map_get(state, :capture, %{})) and
+      is_map(map_get(state, :framework, %{}))
   end
 
   @spec normalize_signal_data(term()) :: map()

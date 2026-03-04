@@ -47,7 +47,7 @@ defmodule Jido.MemoryOS.Phase06IntegrationTest do
                opts
              )
 
-    assert length(records) >= 1
+    assert records != []
   end
 
   test "cross-group actor is denied with structured access error", ctx do

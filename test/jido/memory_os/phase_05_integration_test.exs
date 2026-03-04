@@ -1,7 +1,7 @@
 defmodule Jido.MemoryOS.Phase05IntegrationTest do
   use ExUnit.Case, async: false
 
-  alias Jido.MemoryOS.Actions.{Consolidate, Forget, Remember, Retrieve}
+  alias Jido.MemoryOS.Actions.{Consolidate, Forget, PostTurn, PreTurn, Remember, Retrieve}
   alias Jido.MemoryOS.FrameworkAdapter.{MultiAgent, SingleAgent, ToolHeavy}
   alias Jido.MemoryOS.MemoryManager
 
@@ -9,6 +9,14 @@ defmodule Jido.MemoryOS.Phase05IntegrationTest do
     use Jido.Agent,
       name: "phase5_plugin_agent",
       plugins: [Jido.MemoryOS.Plugin]
+  end
+
+  defmodule ToolHeavyPluginAgent do
+    use Jido.Agent,
+      name: "phase5_tool_heavy_plugin_agent",
+      plugins: [
+        {Jido.MemoryOS.Plugin, %{framework_adapter: Jido.MemoryOS.FrameworkAdapter.ToolHeavy}}
+      ]
   end
 
   setup do
@@ -38,6 +46,8 @@ defmodule Jido.MemoryOS.Phase05IntegrationTest do
     assert {"memory_os.retrieve", Retrieve, -10} in PluginAgent.plugin_routes()
     assert {"memory_os.forget", Forget, -10} in PluginAgent.plugin_routes()
     assert {"memory_os.consolidate", Consolidate, -10} in PluginAgent.plugin_routes()
+    assert {"memory_os.pre_turn", PreTurn, -10} in PluginAgent.plugin_routes()
+    assert {"memory_os.post_turn", PostTurn, -10} in PluginAgent.plugin_routes()
     assert {:ok, _jido} = Jido.start(name: Jido)
 
     server =
@@ -101,6 +111,55 @@ defmodule Jido.MemoryOS.Phase05IntegrationTest do
     assert is_map(consolidated_agent.state.summary)
   end
 
+  test "plugin routes use configured framework adapter for pre/post turn", ctx do
+    case Jido.start(name: Jido) do
+      {:ok, _jido} -> :ok
+      {:error, {:already_started, _jido}} -> :ok
+    end
+
+    server =
+      start_supervised!(
+        {Jido.AgentServer,
+         agent: ToolHeavyPluginAgent,
+         id: "phase5-plugin-adapter-agent-#{System.unique_integer([:positive])}"},
+        id: {:phase5_adapter_agent_server, System.unique_integer([:positive])}
+      )
+
+    post_turn_signal =
+      signal!(
+        "memory_os.post_turn",
+        memory_runtime_params(ctx, %{
+          response_text: "plugin adapter route captured tool traces",
+          chain_id: "chain:phase5:plugin-adapter",
+          tool_events: [
+            %{tool_name: "weather_lookup", status: :ok, result: "70F and sunny"},
+            %{tool_name: "calendar_create", status: :ok, result: %{event_id: "evt-plugin"}}
+          ],
+          memory_result_key: :post_turn_result
+        })
+      )
+
+    assert {:ok, post_turn_agent} = Jido.AgentServer.call(server, post_turn_signal)
+    post_turn_result = post_turn_agent.state.post_turn_result
+    assert is_binary(post_turn_result.assistant_memory_id)
+    assert length(post_turn_result.tool_memory_ids) == 2
+
+    pre_turn_signal =
+      signal!(
+        "memory_os.pre_turn",
+        memory_runtime_params(ctx, %{
+          memory_query: %{text: "weather", tier_mode: :short, limit: 5},
+          tool_names: ["weather_lookup"],
+          memory_result_key: :pre_turn_result
+        })
+      )
+
+    assert {:ok, pre_turn_agent} = Jido.AgentServer.call(server, pre_turn_signal)
+    pre_turn_result = pre_turn_agent.state.pre_turn_result
+    assert "tool:weather_lookup" in pre_turn_result.retrieval.tool_tags
+    assert pre_turn_result.retrieval.result_count >= 1
+  end
+
   test "plugin handle_signal captures events with wildcard rules and skip overrides", ctx do
     plugin_config = %{
       manager: ctx.manager,
@@ -129,7 +188,7 @@ defmodule Jido.MemoryOS.Phase05IntegrationTest do
                memory_runtime_opts(ctx)
              )
 
-    assert length(records) >= 1
+    assert records != []
     assert Enum.any?(records, fn record -> "capture:llm" in (record.tags || []) end)
 
     ignored = signal!("ai.llm.ignore", %{response: "should not capture"})
@@ -161,6 +220,7 @@ defmodule Jido.MemoryOS.Phase05IntegrationTest do
     assert restored.bindings.server == :phase5_memory_manager
     assert restored.capture.patterns == ["ai.*"]
     assert restored.capture.rules != []
+    assert restored.framework.adapter == Jido.MemoryOS.FrameworkAdapter.SingleAgent
 
     assert :drop = Jido.MemoryOS.Plugin.on_checkpoint(:invalid, %{})
 

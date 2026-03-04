@@ -151,7 +151,7 @@ defmodule Jido.MemoryOS.CrossPhaseAcceptanceTest do
     }
 
     assert {:ok, records} = Jido.MemoryOS.retrieve(ctx.target, query, opts)
-    assert length(records) >= 1
+    assert records != []
     assert String.contains?(String.downcase(hd(records).text || ""), "formal")
 
     assert {:ok, explain} = Jido.MemoryOS.explain_retrieval(ctx.target, query, opts)
