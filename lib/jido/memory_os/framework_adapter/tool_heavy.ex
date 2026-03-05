@@ -16,14 +16,14 @@ defmodule Jido.MemoryOS.FrameworkAdapter.ToolHeavy do
     tool_names = tool_names(turn_input)
     tool_tags = Enum.map(tool_names, &("tool:" <> sanitize_tag(&1)))
 
-    query =
-      query0
-      |> Map.update(:tags_any, tool_tags, fn tags ->
-        FrameworkAdapter.normalize_tags(tags) |> Kernel.++(tool_tags) |> Enum.uniq()
-      end)
-      |> maybe_put_empty_tags_any()
+    # Don't add tool_tags to tags_any — that's a hard filter at the store level
+    # which eliminates LLM response records (they lack tool:* tags).
+    # The existing scoring dimensions (semantic, recency, heat) rank results instead.
+    query = maybe_put_empty_tags_any(query0)
 
-    memory_opts = FrameworkAdapter.memory_opts(opts, turn_input)
+    memory_opts =
+      FrameworkAdapter.memory_opts(opts, turn_input)
+      |> Keyword.put(:tool_tags, tool_tags)
 
     case Jido.MemoryOS.explain_retrieval(target, query, memory_opts) do
       {:ok, explain} ->
@@ -31,7 +31,7 @@ defmodule Jido.MemoryOS.FrameworkAdapter.ToolHeavy do
          %{
            query: query,
            context_pack: FrameworkAdapter.map_get(explain, :context_pack, %{}),
-           records: FrameworkAdapter.map_get(explain, :records, []),
+           candidates: FrameworkAdapter.map_get(explain, :records, []),
            retrieval: %{
              result_count: FrameworkAdapter.map_get(explain, :result_count, 0),
              decision_trace: FrameworkAdapter.map_get(explain, :decision_trace, []),

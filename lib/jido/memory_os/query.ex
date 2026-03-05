@@ -12,6 +12,7 @@ defmodule Jido.MemoryOS.Query do
           tags_any: [String.t()],
           tags_all: [String.t()],
           text_contains: String.t() | nil,
+          query_text: String.t() | nil,
           since: integer() | nil,
           until: integer() | nil,
           limit: pos_integer(),
@@ -32,6 +33,7 @@ defmodule Jido.MemoryOS.Query do
             tags_any: [],
             tags_all: [],
             text_contains: nil,
+            query_text: nil,
             since: nil,
             until: nil,
             limit: 20,
@@ -40,7 +42,7 @@ defmodule Jido.MemoryOS.Query do
             topic_keys: [],
             candidate_fanout: 60,
             semantic_provider: nil,
-            semantic_timeout_ms: 120,
+            semantic_timeout_ms: 5_000,
             context_token_budget: 1_200,
             include_excluded: false,
             debug: false
@@ -62,10 +64,17 @@ defmodule Jido.MemoryOS.Query do
              max(limit * 3, limit + 4)
            ),
          {:ok, semantic_timeout_ms} <-
-           normalize_positive_integer(resolve_attr(attrs, :semantic_timeout_ms, 120), 120),
+           normalize_positive_integer(
+             resolve_attr(attrs, :semantic_timeout_ms, opts[:semantic_timeout_ms] || 5_000),
+             5_000
+           ),
          {:ok, context_token_budget} <-
-           normalize_positive_integer(resolve_attr(attrs, :context_token_budget, 1_200), 1_200) do
+           normalize_positive_integer(
+             resolve_attr(attrs, :context_token_budget, opts[:context_token_budget] || 1_200),
+             1_200
+           ) do
       text_contains = normalize_text(resolve_attr(attrs, :text_contains))
+      query_text = normalize_text(resolve_attr(attrs, :query_text))
 
       persona_keys =
         attrs
@@ -77,7 +86,8 @@ defmodule Jido.MemoryOS.Query do
         |> resolve_attr(:topic_keys, infer_topic_keys(attrs))
         |> normalize_tags()
 
-      semantic_provider = normalize_module(resolve_attr(attrs, :semantic_provider))
+      semantic_provider =
+        normalize_module(resolve_attr(attrs, :semantic_provider, opts[:semantic_provider]))
 
       query_struct = %__MODULE__{
         tier_mode: tier_mode,
@@ -86,6 +96,7 @@ defmodule Jido.MemoryOS.Query do
         tags_any: normalize_tags(resolve_attr(attrs, :tags_any, [])),
         tags_all: normalize_tags(resolve_attr(attrs, :tags_all, [])),
         text_contains: text_contains,
+        query_text: query_text,
         since: normalize_optional_integer(resolve_attr(attrs, :since)),
         until: normalize_optional_integer(resolve_attr(attrs, :until)),
         limit: limit,

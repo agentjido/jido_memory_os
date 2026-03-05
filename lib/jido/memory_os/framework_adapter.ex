@@ -27,6 +27,8 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
     :context_token_budget,
     :semantic_provider,
     :semantic_timeout_ms,
+    :embed_fn,
+    :embedding_store,
     :timeout_ms,
     :call_timeout,
     :limit
@@ -98,6 +100,7 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
               map_get(payload_map, :query) ||
                 map_get(payload_map, :prompt) ||
                 map_get(payload_map, :text),
+            query_text: map_get(payload_map, :query_text),
             tags_any: map_get(payload_map, :tags),
             limit:
               map_get(payload_map, :memory_limit, map_get(payload_map, :limit, default_limit))

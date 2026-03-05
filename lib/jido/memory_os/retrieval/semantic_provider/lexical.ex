@@ -13,13 +13,14 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
   @impl true
   @spec score(Query.t(), [map()], keyword()) :: {:ok, %{optional(String.t()) => number()}}
   def score(%Query{} = query, candidates, _opts) do
-    query_tokens = tokenize(query.text_contains)
+    scoring_text = query.query_text || query.text_contains
+    query_tokens = tokenize(scoring_text)
 
     scores =
       candidates
       |> Enum.reduce(%{}, fn candidate, acc ->
         key = candidate.key || Candidate.candidate_key(candidate.namespace, candidate.id)
-        score = lexical_similarity(candidate, query.text_contains, query_tokens)
+        score = lexical_similarity(candidate, scoring_text, query_tokens)
         Map.put(acc, key, score)
       end)
 

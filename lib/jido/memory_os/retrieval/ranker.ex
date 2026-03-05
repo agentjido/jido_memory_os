@@ -57,35 +57,43 @@ defmodule Jido.MemoryOS.Retrieval.Ranker do
           {:ok, map(), map()} | {:error, term()}
   defp semantic_scores(query, candidates, lexical_scores, opts) do
     provider = provider_module(query, opts)
-    timeout_ms = query.semantic_timeout_ms
+    namespace = Keyword.get(opts, :namespace, "unknown")
+    telemetry_meta = %{namespace: namespace, provider: inspect(provider)}
 
-    task = Task.async(fn -> provider.score(query, candidates, opts) end)
+    :telemetry.span([:jido, :memory_os, :retrieval, :semantic], telemetry_meta, fn ->
+      timeout_ms = query.semantic_timeout_ms
+      task = Task.async(fn -> provider.score(query, candidates, opts) end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, scores}} ->
-        {:ok, scores,
-         %{
-           provider: provider,
-           degraded?: false,
-           reason: nil
-         }}
+      result =
+        case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+          {:ok, {:ok, scores}} ->
+            {:ok, scores,
+             %{
+               provider: provider,
+               degraded?: false,
+               reason: nil
+             }}
 
-      {:ok, {:error, reason}} ->
-        {:ok, lexical_scores,
-         %{
-           provider: Lexical,
-           degraded?: true,
-           reason: {:provider_error, provider, reason}
-         }}
+          {:ok, {:error, reason}} ->
+            {:ok, lexical_scores,
+             %{
+               provider: Lexical,
+               degraded?: true,
+               reason: {:provider_error, provider, reason}
+             }}
 
-      nil ->
-        {:ok, lexical_scores,
-         %{
-           provider: Lexical,
-           degraded?: true,
-           reason: {:provider_timeout, provider, timeout_ms}
-         }}
-    end
+          nil ->
+            {:ok, lexical_scores,
+             %{
+               provider: Lexical,
+               degraded?: true,
+               reason: {:provider_timeout, provider, timeout_ms}
+             }}
+        end
+
+      degraded = match?({:ok, _, %{degraded?: true}}, result)
+      {result, %{candidate_count: length(candidates), degraded: degraded}}
+    end)
   end
 
   @spec provider_module(Query.t(), keyword()) :: module()
