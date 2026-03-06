@@ -74,9 +74,10 @@ defmodule Jido.MemoryOS.EmbeddingStore.ETS do
   @impl true
   @spec delete_embeddings(String.t(), [String.t()], keyword()) ::
           :ok | {:error, term()}
+  def delete_embeddings(namespace, record_ids, opts \\ [])
   def delete_embeddings(_namespace, [], _opts), do: :ok
 
-  def delete_embeddings(namespace, record_ids, opts \\ []) do
+  def delete_embeddings(namespace, record_ids, opts) do
     table = ensure_table(opts)
 
     Enum.each(record_ids, fn record_id ->

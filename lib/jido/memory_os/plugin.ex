@@ -73,6 +73,7 @@ defmodule Jido.MemoryOS.Plugin do
 
   alias Jido.MemoryOS.ErrorMapping
   alias Jido.Signal
+  import Jido.MemoryOS.Helpers
 
   @default_capture_patterns ["ai.react.query", "ai.llm.response", "ai.tool.result"]
   @default_capture_source "jido.signal"
@@ -113,7 +114,13 @@ defmodule Jido.MemoryOS.Plugin do
                    capture_store_opts: Zoi.any() |> Zoi.default([]),
                    include_signal_metadata: Zoi.boolean() |> Zoi.default(true),
                    framework_adapter: Zoi.any() |> Zoi.optional(),
-                   framework_adapter_opts: Zoi.any() |> Zoi.default([])
+                   framework_adapter_opts: Zoi.any() |> Zoi.default([]),
+                   # Extension keys (functions/tuples that can't be schema-typed)
+                   capture_text_fn: Zoi.any() |> Zoi.optional(),
+                   embed_fn: Zoi.any() |> Zoi.optional(),
+                   embedding_store: Zoi.any() |> Zoi.optional(),
+                   semantic_provider: Zoi.any() |> Zoi.optional(),
+                   context_token_budget: Zoi.any() |> Zoi.optional()
                  })
 
   use Jido.Plugin,
@@ -195,6 +202,8 @@ defmodule Jido.MemoryOS.Plugin do
     end)
   end
 
+  def handle_signal(_signal, _context), do: {:ok, :continue}
+
   defp do_handle_capture(signal, context, state, capture, namespace) do
     with true <- capture_enabled?(capture),
          true <- matches_capture_patterns?(signal.type, map_get(capture, :patterns, [])),
@@ -204,23 +213,28 @@ defmodule Jido.MemoryOS.Plugin do
       capture_text_fn = Map.get(extensions, :capture_text_fn)
       attrs = build_capture_attrs(signal, capture, decision, capture_text_fn)
 
-      if decision.require_text? and attrs.text == fallback_signal_text(signal.type) do
-        {:ok, :continue}
-      else
-        opts = build_capture_opts(state, decision)
+      cond do
+        attrs == :skip ->
+          {:ok, :continue}
 
-        case Jido.MemoryOS.remember(map_get(context, :agent, %{}), attrs, opts) do
-          {:ok, record} ->
-            maybe_embed_on_capture(record, state, namespace)
-            {:ok, :continue}
+        decision.require_text? and attrs.text == fallback_signal_text(signal.type) ->
+          {:ok, :continue}
 
-          {:error, reason} ->
-            Logger.debug(
-              "[MemoryOS:capture] remember failed signal=#{signal.type} reason=#{inspect(reason)}"
-            )
+        true ->
+          opts = build_capture_opts(state, decision)
 
-            maybe_capture_error(reason, capture)
-        end
+          case Jido.MemoryOS.remember(map_get(context, :agent, %{}), attrs, opts) do
+            {:ok, record} ->
+              maybe_embed_on_capture(record, state, namespace)
+              {:ok, :continue}
+
+            {:error, reason} ->
+              Logger.debug(
+                "[MemoryOS:capture] remember failed signal=#{signal.type} reason=#{inspect(reason)}"
+              )
+
+              maybe_capture_error(reason, capture)
+          end
       end
     else
       false ->
@@ -238,34 +252,61 @@ defmodule Jido.MemoryOS.Plugin do
     end
   end
 
-  def handle_signal(_signal, _context), do: {:ok, :continue}
-
   @spec maybe_embed_on_capture(Jido.Memory.Record.t(), map(), String.t()) :: :ok
   defp maybe_embed_on_capture(record, state, namespace) do
     extensions = Map.get(state, :extensions, %{})
     embed_fn = Map.get(extensions, :embed_fn)
     embedding_store = Map.get(extensions, :embedding_store)
 
+    Logger.debug(
+      "[MemoryOS:embed] maybe_embed_on_capture — " <>
+        "embed_fn?=#{is_function(embed_fn, 1)}, " <>
+        "store=#{inspect(embedding_store)}, " <>
+        "text=#{inspect(record.text && String.slice(record.text, 0, 50))}"
+    )
+
     with true <- is_function(embed_fn, 1),
          {store_mod, store_opts} when is_atom(store_mod) <- embedding_store,
          text when is_binary(text) <- record.text,
          trimmed when trimmed != "" <- String.trim(text) do
       spawn(fn ->
-        telemetry_meta = %{namespace: namespace}
+        try do
+          telemetry_meta = %{namespace: namespace}
 
-        :telemetry.span([:jido, :memory_os, :capture, :embed], telemetry_meta, fn ->
-          result =
-            case embed_fn.([trimmed]) do
-              {:ok, [vector]} when is_list(vector) ->
-                store_mod.store_embeddings(record.namespace, [{record.id, vector}], store_opts)
-                1
+          :telemetry.span([:jido, :memory_os, :capture, :embed], telemetry_meta, fn ->
+            result =
+              case embed_fn.([trimmed]) do
+                {:ok, [vector]} when is_list(vector) ->
+                  case store_mod.store_embeddings(
+                         record.namespace,
+                         [{record.id, vector}],
+                         store_opts
+                       ) do
+                    :ok ->
+                      1
 
-              _ ->
-                0
-            end
+                    {:error, reason} ->
+                      Logger.warning(
+                        "[MemoryOS:embed] store_embeddings failed: #{inspect(reason)}"
+                      )
 
-          {:ok, %{vector_count: result}}
-        end)
+                      0
+                  end
+
+                other ->
+                  Logger.debug("[MemoryOS:embed] embed_fn returned unexpected: #{inspect(other)}")
+
+                  0
+              end
+
+            {:ok, %{vector_count: result}}
+          end)
+        rescue
+          e ->
+            Logger.warning(
+              "[MemoryOS:embed] embedding failed for record #{record.id}: #{Exception.message(e)}"
+            )
+        end
       end)
     end
 
@@ -299,11 +340,11 @@ defmodule Jido.MemoryOS.Plugin do
     # from config to avoid Config.validate rejecting them as unknown fields.
     extensions =
       %{}
-      |> maybe_put_config(:embed_fn, map_get(config_map, :embed_fn))
-      |> maybe_put_config(:embedding_store, map_get(config_map, :embedding_store))
-      |> maybe_put_config(:semantic_provider, map_get(config_map, :semantic_provider))
-      |> maybe_put_config(:context_token_budget, map_get(config_map, :context_token_budget))
-      |> maybe_put_config(:capture_text_fn, map_get(config_map, :capture_text_fn))
+      |> maybe_put(:embed_fn, map_get(config_map, :embed_fn))
+      |> maybe_put(:embedding_store, map_get(config_map, :embedding_store))
+      |> maybe_put(:semantic_provider, map_get(config_map, :semantic_provider))
+      |> maybe_put(:context_token_budget, map_get(config_map, :context_token_budget))
+      |> maybe_put(:capture_text_fn, map_get(config_map, :capture_text_fn))
       |> default_embedding_store()
 
     %{
@@ -315,10 +356,6 @@ defmodule Jido.MemoryOS.Plugin do
       framework: normalize_framework_state(config_map)
     }
   end
-
-  @spec maybe_put_config(map(), atom(), term()) :: map()
-  defp maybe_put_config(map, _key, nil), do: map
-  defp maybe_put_config(map, key, value), do: Map.put(map, key, value)
 
   # When embed_fn is configured but no embedding_store, default to ETS
   @spec default_embedding_store(map()) :: map()
@@ -552,26 +589,34 @@ defmodule Jido.MemoryOS.Plugin do
           map(),
           (String.t(), map() -> {:ok, String.t()} | :skip) | nil
         ) ::
-          map()
+          map() | :skip
   defp build_capture_attrs(%Signal{} = signal, capture, decision, capture_text_fn) do
     data = normalize_signal_data(signal.data)
 
-    inferred_text = infer_signal_text(signal.type, data)
-
-    # If a custom capture_text_fn is provided and the default inference didn't
-    # find meaningful text, try the custom function before falling back.
+    # If a custom capture_text_fn is provided, it takes precedence over auto-inference.
+    # When it returns :skip, the signal is explicitly rejected (no fallback to inference).
     enriched_text =
-      case {inferred_text, capture_text_fn} do
-        {nil, fun} when is_function(fun, 2) ->
+      case capture_text_fn do
+        fun when is_function(fun, 2) ->
           case fun.(signal.type, data) do
             {:ok, text} when is_binary(text) and text != "" -> text
-            _ -> nil
+            :skip -> :skip
+            _ -> infer_signal_text(signal.type, data)
           end
 
         _ ->
-          inferred_text
+          infer_signal_text(signal.type, data)
       end
 
+    # capture_text_fn explicitly rejected this signal
+    if enriched_text == :skip do
+      :skip
+    else
+      build_capture_attrs_from_text(enriched_text, signal, data, capture, decision)
+    end
+  end
+
+  defp build_capture_attrs_from_text(enriched_text, signal, data, capture, decision) do
     default_text = enriched_text || fallback_signal_text(signal.type)
     base_text = normalize_non_empty_string(map_get(decision.attrs, :text), default_text)
 
@@ -653,8 +698,6 @@ defmodule Jido.MemoryOS.Plugin do
           ) <>
           "-" <> Integer.to_string(System.unique_integer([:positive, :monotonic]))
 
-    remember_config = config
-
     base_opts =
       %{
         tier:
@@ -675,9 +718,9 @@ defmodule Jido.MemoryOS.Plugin do
               (map_get(capture, :store_opts, []) |> normalize_keyword())
           ),
         correlation_id: correlation_id,
-        config: remember_config,
+        config: config,
         server: map_get(decision.opts, :server, map_get(manager, :server)),
-        plugin_state: %{config: remember_config}
+        plugin_state: %{config: config}
       }
 
     manager_opts = normalize_keyword(map_get(manager, :opts, []))
@@ -744,99 +787,50 @@ defmodule Jido.MemoryOS.Plugin do
     |> String.trim("_")
   end
 
-  @spec infer_signal_text(String.t(), map()) :: String.t()
-  defp infer_signal_text(signal_type, data) do
-    candidates = [
-      map_get(data, :text),
-      map_get(data, :query),
-      map_get(data, :prompt),
-      extract_from_result_tuple(map_get(data, :result)),
-      map_get(data, :response),
-      map_get(data, :output),
-      map_get(data, :result),
-      map_get(data, :message),
-      get_in(data, ["text"]),
-      get_in(data, ["query"]),
-      get_in(data, ["prompt"]),
-      extract_from_result_tuple(get_in(data, ["result"])),
-      get_in(data, ["response"]),
-      get_in(data, ["output"]),
-      get_in(data, ["result"]),
-      get_in(data, ["message"])
-    ]
+  @infer_text_fields [:text, :query, :prompt, :response, :output, :result, :message]
 
-    Enum.find_value(candidates, fn
-      value when is_binary(value) and value != "" -> String.trim(value)
-      _ -> nil
-    end)
+  @spec infer_signal_text(String.t(), map()) :: String.t()
+  defp infer_signal_text(_signal_type, data) do
+    # Try extracting from a result tuple first (handles {:ok, %{text: ...}} etc.)
+    tuple_text = extract_from_result_tuple(map_get(data, :result))
+
+    if tuple_text && meaningful_text?(tuple_text) do
+      tuple_text
+    else
+      # map_get already checks both atom and string keys, so no need for get_in duplicates
+      Enum.find_value(@infer_text_fields, fn field ->
+        case map_get(data, field) do
+          value when is_binary(value) and value != "" ->
+            trimmed = String.trim(value)
+            if meaningful_text?(trimmed), do: trimmed, else: nil
+
+          _ ->
+            nil
+        end
+      end)
+    end
+  end
+
+  @spec meaningful_text?(String.t()) :: boolean()
+  defp meaningful_text?(text) do
+    text not in ["[]", "{}", "null", "undefined"] and byte_size(text) >= 3
   end
 
   @spec fallback_signal_text(String.t()) :: String.t()
   defp fallback_signal_text(signal_type), do: "captured signal #{signal_type}"
 
+  @result_text_fields [:text, :llm_response, :response, :output, :message]
+
   @spec extract_from_result_tuple(term()) :: String.t() | nil
-  # 2-tuple: {:ok, %{text: "..."}}
-  defp extract_from_result_tuple({:ok, %{text: text}}) when is_binary(text) and text != "",
-    do: text
+  defp extract_from_result_tuple({:ok, %{} = map, _effects}),
+    do: find_text_in(map, @result_text_fields)
 
-  defp extract_from_result_tuple({:ok, %{"text" => text}}) when is_binary(text) and text != "",
-    do: text
+  defp extract_from_result_tuple({:ok, %{} = map}),
+    do: find_text_in(map, @result_text_fields)
 
-  # 3-tuple: {:ok, %{text: "..."}, effects}
-  defp extract_from_result_tuple({:ok, %{text: text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{"text" => text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  # 3-tuple with :llm_response key (common in tool results)
-  defp extract_from_result_tuple({:ok, %{llm_response: text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{"llm_response" => text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  # 2-tuple with :llm_response key
-  defp extract_from_result_tuple({:ok, %{llm_response: text}})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{"llm_response" => text}})
-       when is_binary(text) and text != "",
-       do: text
-
-  # 3-tuple/2-tuple with :response, :output, :message keys
-  defp extract_from_result_tuple({:ok, %{response: text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{response: text}})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{output: text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{output: text}})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{message: text}, _effects})
-       when is_binary(text) and text != "",
-       do: text
-
-  defp extract_from_result_tuple({:ok, %{message: text}})
-       when is_binary(text) and text != "",
-       do: text
-
-  # 3-tuple with binary result directly
-  defp extract_from_result_tuple({:ok, result, _effects}) when is_binary(result) and result != "",
-    do: result
+  defp extract_from_result_tuple({:ok, result, _effects})
+       when is_binary(result) and result != "",
+       do: result
 
   defp extract_from_result_tuple(_), do: nil
 
@@ -901,22 +895,6 @@ defmodule Jido.MemoryOS.Plugin do
 
   defp normalize_rules(_rules), do: []
 
-  @spec normalize_tags(term()) :: [String.t()]
-  defp normalize_tags(tags) when is_list(tags) do
-    tags
-    |> Enum.map(fn
-      tag when is_binary(tag) -> String.trim(tag)
-      tag when is_atom(tag) -> tag |> Atom.to_string() |> String.trim()
-      tag -> tag |> to_string() |> String.trim()
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp normalize_tags(tag) when is_binary(tag), do: normalize_tags([tag])
-  defp normalize_tags(tag) when is_atom(tag), do: normalize_tags([tag])
-  defp normalize_tags(_tags), do: []
-
   @spec normalize_boolean(term()) :: boolean()
   defp normalize_boolean(value) when is_boolean(value), do: value
   defp normalize_boolean("true"), do: true
@@ -925,26 +903,8 @@ defmodule Jido.MemoryOS.Plugin do
   defp normalize_boolean(0), do: false
   defp normalize_boolean(_value), do: false
 
-  @spec normalize_non_empty_string(term(), String.t() | nil) :: String.t() | nil
-  defp normalize_non_empty_string(value, fallback)
-
-  defp normalize_non_empty_string(value, fallback) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: fallback, else: trimmed
-  end
-
-  defp normalize_non_empty_string(nil, fallback), do: fallback
-
-  defp normalize_non_empty_string(value, fallback),
-    do: normalize_non_empty_string(to_string(value), fallback)
-
   @spec normalize_optional_string(term()) :: String.t() | nil
   defp normalize_optional_string(value), do: normalize_non_empty_string(value, nil)
-
-  @spec normalize_keyword(term()) :: keyword()
-  defp normalize_keyword(opts) when is_list(opts), do: opts
-  defp normalize_keyword(%{} = opts), do: Enum.to_list(opts)
-  defp normalize_keyword(_opts), do: []
 
   @spec compact_keyword(map()) :: keyword()
   defp compact_keyword(map) do
@@ -972,42 +932,4 @@ defmodule Jido.MemoryOS.Plugin do
       end
     end)
   end
-
-  @spec maybe_put(map(), atom(), term()) :: map()
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  @spec normalize_map(term()) :: map()
-  defp normalize_map(%{} = map), do: map
-
-  defp normalize_map(list) when is_list(list) do
-    if Keyword.keyword?(list), do: Map.new(list), else: %{}
-  end
-
-  defp normalize_map(_value), do: %{}
-
-  @spec map_get(map(), atom() | String.t(), term()) :: term()
-  defp map_get(map, key, default \\ nil)
-
-  defp map_get(map, key, default) when is_atom(key),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-
-  defp map_get(map, key, default) when is_binary(key) do
-    case Enum.find(map, fn
-           {atom_key, _value} when is_atom(atom_key) -> Atom.to_string(atom_key) == key
-           _ -> false
-         end) do
-      {_, value} -> value
-      nil -> Map.get(map, key, default)
-    end
-  end
-
-  @spec jido_error?(term()) :: boolean()
-  defp jido_error?(%{__struct__: module}) when is_atom(module) do
-    module
-    |> Atom.to_string()
-    |> String.starts_with?("Elixir.Jido.Error.")
-  end
-
-  defp jido_error?(_reason), do: false
 end

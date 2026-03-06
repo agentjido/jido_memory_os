@@ -99,7 +99,7 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Embedding do
     # First check record.embedding on each candidate
     {with_embedding, without} =
       Enum.split_with(candidates, fn candidate ->
-        embedding = get_in(candidate, [:record, :embedding])
+        embedding = candidate.record.embedding
         is_list(embedding) and embedding != []
       end)
 
