@@ -217,6 +217,12 @@ defmodule Jido.MemoryOS.DataSafety do
 
   defp mask_value(value, mode) when is_list(value), do: Enum.map(value, &mask_value(&1, mode))
 
+  defp mask_value(%{__struct__: _} = value, mode) do
+    value
+    |> Map.from_struct()
+    |> mask_value(mode)
+  end
+
   defp mask_value(value, mode) when is_map(value) do
     Enum.reduce(value, %{}, fn {key, item}, acc ->
       masked = mask_value(item, mode)

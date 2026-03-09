@@ -1,6 +1,36 @@
 defmodule Jido.MemoryOS.Retrieval.ContextPack do
   @moduledoc """
   Builds token-bounded, provenance-aware context packs from ranked candidates.
+
+  A context pack groups retrieved memory entries by tier and topic, respects a
+  token budget, and can be rendered into a prompt-ready string via `render/2`.
+
+  ## Building a Context Pack
+
+      query = %Jido.MemoryOS.Query{context_token_budget: 4_000, ...}
+      ranked = [%{text: "Standup at 3:30 PM", tier: :short, topic: "meetings", ...}]
+
+      pack = ContextPack.build(query, ranked)
+      # => %{
+      #   token_budget: 4000,
+      #   tokens_used: 42,
+      #   truncated: false,
+      #   groups: [%{tier: :short, topic: "meetings", entries: [...]}],
+      #   persona_hints: [...]
+      # }
+
+  ## Rendering for Prompt Injection
+
+      ContextPack.render(pack)
+      # => "Your memory of past interactions with this user:
+      #     - Standup at 3:30 PM"
+
+      ContextPack.render(pack, header: "Memory from prior sessions:")
+      # => "Memory from prior sessions:
+      #     - Standup at 3:30 PM"
+
+      ContextPack.render(%{groups: []})
+      # => nil  (empty packs return nil)
   """
 
   alias Jido.MemoryOS.Query
@@ -34,6 +64,39 @@ defmodule Jido.MemoryOS.Retrieval.ContextPack do
       persona_hints: synthesize_persona_hints(entries)
     }
   end
+
+  @doc """
+  Renders a context pack into a formatted string suitable for prompt injection.
+
+  Returns `nil` when the pack is empty or contains no non-blank text entries.
+
+  ## Options
+
+    * `:header` — custom header line (default:
+      `"Your memory of past interactions with this user:"`)
+  """
+  @spec render(map(), keyword()) :: String.t() | nil
+  def render(pack, opts \\ [])
+
+  def render(%{groups: groups}, opts) when is_list(groups) and groups != [] do
+    header =
+      Keyword.get(opts, :header, "Your memory of past interactions with this user:")
+
+    entries =
+      groups
+      |> Enum.flat_map(&Map.get(&1, :entries, []))
+      |> Enum.map(&String.trim(Map.get(&1, :text, "")))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    if entries == [] do
+      nil
+    else
+      header <> "\n" <> Enum.map_join(entries, "\n", &("- " <> &1))
+    end
+  end
+
+  def render(_pack, _opts), do: nil
 
   @spec take_with_token_budget([map()], pos_integer()) :: {[map()], non_neg_integer(), boolean()}
   defp take_with_token_budget(ranked, token_budget) do

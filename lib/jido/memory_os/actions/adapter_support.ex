@@ -3,6 +3,7 @@ defmodule Jido.MemoryOS.Actions.AdapterSupport do
 
   alias Jido.MemoryOS.{ErrorMapping, FrameworkAdapter}
   alias Jido.MemoryOS.FrameworkAdapter.SingleAgent
+  import Jido.MemoryOS.Helpers, only: [normalize_keyword: 1, map_get: 2, map_get: 3]
 
   @required_callbacks [pre_turn: 3, post_turn: 3, normalize_error: 2]
 
@@ -129,27 +130,6 @@ defmodule Jido.MemoryOS.Actions.AdapterSupport do
          {:invalid_framework_adapter_callbacks, module, missing},
          operation
        )}
-    end
-  end
-
-  @spec normalize_keyword(term()) :: keyword()
-  defp normalize_keyword(opts) when is_list(opts), do: opts
-  defp normalize_keyword(%{} = opts), do: Enum.to_list(opts)
-  defp normalize_keyword(_opts), do: []
-
-  @spec map_get(map(), atom() | String.t(), term()) :: term()
-  defp map_get(map, key, default \\ nil)
-
-  defp map_get(map, key, default) when is_atom(key),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-
-  defp map_get(map, key, default) when is_binary(key) do
-    case Enum.find(map, fn
-           {atom_key, _value} when is_atom(atom_key) -> Atom.to_string(atom_key) == key
-           _ -> false
-         end) do
-      {_, value} -> value
-      nil -> Map.get(map, key, default)
     end
   end
 end

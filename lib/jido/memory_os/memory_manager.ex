@@ -1386,11 +1386,18 @@ defmodule Jido.MemoryOS.MemoryManager do
     masking_mode =
       AccessPolicy.masking_mode(policy_ctx, map_get(state.policy_cache, :governance, %{}))
 
-    case Query.new(request.payload,
-           default_limit: state.policy_cache.retrieval.limit,
-           tier_mode: Keyword.get(request.runtime_opts, :tier_mode),
-           tier: Keyword.get(request.runtime_opts, :tier)
-         ) do
+    query_opts =
+      request.runtime_opts
+      |> Keyword.take([
+        :tier_mode,
+        :tier,
+        :semantic_provider,
+        :context_token_budget,
+        :semantic_timeout_ms
+      ])
+      |> Keyword.put(:default_limit, state.policy_cache.retrieval.limit)
+
+    case Query.new(request.payload, query_opts) do
       {:ok, query0} ->
         query = maybe_enable_explain_mode(query0, explain?)
 
@@ -1445,6 +1452,12 @@ defmodule Jido.MemoryOS.MemoryManager do
   @spec forget_request(request(), state()) :: {term(), state()}
   defp forget_request(request, state) do
     result = MemoryRuntime.forget(request.target, request.payload, request.runtime_opts)
+
+    case result do
+      {:ok, true} -> maybe_delete_embedding(request.payload, request.runtime_opts)
+      _ -> :ok
+    end
+
     {result, state}
   end
 
@@ -1473,6 +1486,30 @@ defmodule Jido.MemoryOS.MemoryManager do
   @spec run_retrieval_pipeline(map() | struct(), Query.t(), keyword(), state()) ::
           {:ok, map()} | {:error, term()}
   defp run_retrieval_pipeline(target, query, runtime_opts, state) do
+    namespace = Keyword.get(runtime_opts, :namespace, "unknown")
+    telemetry_meta = %{namespace: namespace, tier_mode: query.tier_mode}
+
+    :telemetry.span([:jido, :memory_os, :retrieval], telemetry_meta, fn ->
+      result = do_run_retrieval_pipeline(target, query, runtime_opts, state)
+
+      extra_measurements =
+        case result do
+          {:ok, r} ->
+            %{
+              candidate_count: length(Map.get(r, :records, [])),
+              tokens_used: get_in(r, [:context_pack, :tokens_used]) || 0,
+              truncated: get_in(r, [:context_pack, :truncated]) || false
+            }
+
+          _ ->
+            %{candidate_count: 0, tokens_used: 0, truncated: false}
+        end
+
+      {result, extra_measurements}
+    end)
+  end
+
+  defp do_run_retrieval_pipeline(target, query, runtime_opts, state) do
     now = System.system_time(:millisecond)
 
     with {:ok, plan0} <- Planner.plan(query, state.policy_cache.retrieval),
@@ -1496,7 +1533,8 @@ defmodule Jido.MemoryOS.MemoryManager do
              now
            ),
          candidates <- dedupe_candidates(primary_candidates ++ fallback_candidates),
-         {:ok, ranking} <- Ranker.rank(query, candidates, state.policy_cache.retrieval) do
+         {:ok, ranking} <-
+           Ranker.rank(query, candidates, state.policy_cache.retrieval, runtime_opts) do
       selected = Enum.take(ranking.ranked, query.limit)
       selected_keys = MapSet.new(Enum.map(selected, & &1.candidate.key))
       context_pack = ContextPack.build(query, selected)
@@ -1557,9 +1595,14 @@ defmodule Jido.MemoryOS.MemoryManager do
         }
       ]
 
+      selected_records = Enum.map(selected, & &1.record)
+
+      # Async access tracking — update last_accessed_at and visit_count on retrieved records
+      track_retrieval_access(target, selected_records, runtime_opts, now)
+
       {:ok,
        %{
-         records: Enum.map(selected, & &1.record),
+         records: selected_records,
          tier_mode: query.tier_mode,
          plan: plan,
          semantic: ranking.semantic,
@@ -1594,17 +1637,28 @@ defmodule Jido.MemoryOS.MemoryManager do
   defp fetch_tier_candidates(target, query, runtime_opts, tiers, fanout, now) do
     tiers
     |> Enum.reduce_while({:ok, []}, fn tier, {:ok, acc} ->
-      tier_opts = Keyword.put(runtime_opts, :tier, tier)
-      tier_limit = Map.get(fanout, tier, query.limit)
-      query_filters = Query.to_runtime_filters(query, tier_limit)
+      namespace = Keyword.get(runtime_opts, :namespace, "unknown")
+      telemetry_meta = %{namespace: namespace, tier: tier}
 
-      case MemoryRuntime.recall(target, query_filters, tier_opts) do
-        {:ok, records} ->
-          normalized = Enum.map(records, &Candidate.from_record(&1, tier, now))
-          {:cont, {:ok, normalized ++ acc}}
+      result =
+        :telemetry.span([:jido, :memory_os, :retrieval, :tier_fetch], telemetry_meta, fn ->
+          tier_opts = Keyword.put(runtime_opts, :tier, tier)
+          tier_limit = Map.get(fanout, tier, query.limit)
+          query_filters = Query.to_runtime_filters(query, tier_limit)
 
-        {:error, reason} ->
-          {:halt, {:error, reason}}
+          case MemoryRuntime.recall(target, query_filters, tier_opts) do
+            {:ok, records} ->
+              normalized = Enum.map(records, &Candidate.from_record(&1, tier, now))
+              {{:ok, normalized}, %{count: length(normalized)}}
+
+            {:error, reason} ->
+              {{:error, reason}, %{count: 0}}
+          end
+        end)
+
+      case result do
+        {:ok, normalized} -> {:cont, {:ok, normalized ++ acc}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> case do
@@ -1658,6 +1712,63 @@ defmodule Jido.MemoryOS.MemoryManager do
         query.topic_keys == [] or Enum.any?(candidate.topic_keys, &(&1 in query.topic_keys)),
       policy_outcome: :ranked
     }
+  end
+
+  @spec track_retrieval_access(map() | struct(), [Jido.Memory.Record.t()], keyword(), integer()) ::
+          :ok
+  defp track_retrieval_access(_target, [], _opts, _now), do: :ok
+
+  defp track_retrieval_access(target, records, runtime_opts, now) do
+    # Fire-and-forget — don't block retrieval response
+    spawn(fn ->
+      Enum.each(records, fn record ->
+        mem_os =
+          case Metadata.from_record(record) do
+            {:ok, m} -> m
+            _ -> nil
+          end
+
+        if mem_os do
+          mem_os_meta = Map.get(record.metadata || %{}, "mem_os", %{})
+          visit_count = Map.get(mem_os_meta, "visit_count", 0)
+
+          metadata_patch = %{
+            "mem_os" => %{
+              "last_accessed_at" => now,
+              "visit_count" => visit_count + 1,
+              "heat" => compute_heat(visit_count + 1, mem_os.heat, record.observed_at, now)
+            }
+          }
+
+          updated_attrs = Lifecycle.rewrite_record_with_metadata(record, metadata_patch)
+
+          tier =
+            case mem_os.tier do
+              t when t in [:short, :mid, :long] -> t
+              _ -> :short
+            end
+
+          opts = Keyword.put(runtime_opts, :tier, tier)
+          MemoryRuntime.remember(target, updated_attrs, opts)
+        end
+      end)
+    end)
+
+    :ok
+  end
+
+  @spec compute_heat(non_neg_integer(), number(), integer() | nil, integer()) :: number()
+  defp compute_heat(visit_count, _current_heat, observed_at, now) do
+    # Paper formula: Heat = α·N_visit + β·L_interaction + γ·R_recency
+    # Using α=1, β=0 (L_interaction tracked via segment page count), γ=1
+    # Normalize visit_count: cap at 10 visits → 1.0
+    n_visit = min(visit_count / 10.0, 1.0)
+
+    # Recency: exponential decay with time constant ~1e7 seconds (~115 days)
+    age_seconds = max(0, (now - (observed_at || now)) / 1_000)
+    r_recency = :math.exp(-age_seconds / 1.0e7)
+
+    Float.round(min(1.0, 0.5 * n_visit + 0.5 * r_recency), 4)
   end
 
   @spec tier_priority(Config.tier()) :: integer()
@@ -1872,6 +1983,20 @@ defmodule Jido.MemoryOS.MemoryManager do
          {:ok, state3} <- enqueue_long_candidates(mid_context.namespace, page_records, state2),
          {:ok, promoted_records, conflicts, state4} <-
            promote_long_records(target, runtime_opts, mid_context, long_context, state3) do
+      # Heat-based eviction for mid and long tiers after consolidation writes
+      state5 =
+        state4
+        |> enforce_tier_maintenance(
+          target,
+          Keyword.put(runtime_opts, :tier, :mid),
+          mid_context.config.tiers.mid
+        )
+        |> enforce_tier_maintenance(
+          target,
+          Keyword.put(runtime_opts, :tier, :long),
+          long_context.config.tiers.long
+        )
+
       summary = %{
         status: :ok,
         phase: 3,
@@ -1880,10 +2005,10 @@ defmodule Jido.MemoryOS.MemoryManager do
         mid_pages_written: Enum.count(page_records),
         long_promoted: length(promoted_records),
         conflicts: conflicts,
-        consolidation_version: state4.consolidation_version
+        consolidation_version: state5.consolidation_version
       }
 
-      {{:ok, summary}, %{state4 | last_conflicts: conflicts}}
+      {{:ok, summary}, %{state5 | last_conflicts: conflicts}}
     else
       {:error, reason} ->
         {{:error, to_jido_error(reason, :consolidate)}, state}
@@ -2323,25 +2448,73 @@ defmodule Jido.MemoryOS.MemoryManager do
   @spec enforce_short_maintenance(state(), map() | struct(), keyword(), map()) :: state()
   defp enforce_short_maintenance(state, target, runtime_opts, short_context) do
     short_opts = Keyword.put(runtime_opts, :tier, :short)
+    enforce_tier_maintenance(state, target, short_opts, short_context.config.tiers.short)
+  end
 
-    max_records = short_context.config.tiers.short.max_records
+  @spec enforce_tier_maintenance(state(), map() | struct(), keyword(), map()) :: state()
+  defp enforce_tier_maintenance(state, target, tier_opts, tier_config) do
+    max_records = tier_config.max_records
     query_limit = min(max(max_records * 2, max_records + 32), 1_000)
 
-    case MemoryRuntime.recall(target, %{limit: query_limit, order: :desc}, short_opts) do
+    case MemoryRuntime.recall(target, %{limit: query_limit, order: :desc}, tier_opts) do
       {:ok, records} when length(records) > max_records ->
         overflow = length(records) - max_records
+        now = System.system_time(:millisecond)
 
-        records
-        |> Enum.reverse()
-        |> Enum.take(overflow)
-        |> Enum.each(fn record ->
-          _ = MemoryRuntime.forget(target, record.id, short_opts)
+        # Heat-based eviction: evict records with lowest heat score
+        evicted =
+          records
+          |> Enum.sort_by(fn record -> record_heat(record, now) end, :asc)
+          |> Enum.take(overflow)
+
+        Enum.each(evicted, fn record ->
+          _ = MemoryRuntime.forget(target, record.id, tier_opts)
         end)
+
+        # Batch-delete embeddings for evicted records
+        evicted_ids = Enum.map(evicted, & &1.id)
+        maybe_delete_embedding_batch(evicted_ids, tier_opts)
 
         state
 
       _ ->
         state
+    end
+  end
+
+  @spec maybe_delete_embedding(String.t(), keyword()) :: :ok
+  defp maybe_delete_embedding(record_id, runtime_opts) do
+    maybe_delete_embedding_batch([record_id], runtime_opts)
+  end
+
+  @spec maybe_delete_embedding_batch([String.t()], keyword()) :: :ok
+  defp maybe_delete_embedding_batch([], _runtime_opts), do: :ok
+
+  defp maybe_delete_embedding_batch(record_ids, runtime_opts) do
+    embedding_store = Keyword.get(runtime_opts, :embedding_store)
+    namespace = Keyword.get(runtime_opts, :namespace)
+
+    with {store_mod, store_opts} when is_atom(store_mod) <- embedding_store,
+         ns when is_binary(ns) and ns != "" <- namespace do
+      spawn(fn ->
+        store_mod.delete_embeddings(ns, record_ids, store_opts)
+      end)
+    end
+
+    :ok
+  end
+
+  @spec record_heat(Jido.Memory.Record.t(), integer()) :: float()
+  defp record_heat(record, now) do
+    mem_os_meta = Map.get(record.metadata || %{}, "mem_os", %{})
+
+    case Map.get(mem_os_meta, "heat") do
+      heat when is_number(heat) ->
+        heat
+
+      _ ->
+        visit_count = Map.get(mem_os_meta, "visit_count", 0)
+        compute_heat(visit_count, 0, record.observed_at, now)
     end
   end
 
@@ -2482,12 +2655,22 @@ defmodule Jido.MemoryOS.MemoryManager do
 
       now = System.system_time(:millisecond)
 
+      namespace = Keyword.get(request.runtime_opts, :namespace, "unknown")
+
       case Map.get(state.query_cache, signature) do
         %{retrieval: retrieval, cached_at: cached_at}
         when is_map(retrieval) and is_integer(cached_at) and now - cached_at <= ttl_ms ->
+          :telemetry.execute([:jido, :memory_os, :retrieval, :cache, :hit], %{}, %{
+            namespace: namespace
+          })
+
           {{:ok, retrieval}, increment_metric(state, :cache_hit)}
 
         _stale_or_miss ->
+          :telemetry.execute([:jido, :memory_os, :retrieval, :cache, :miss], %{}, %{
+            namespace: namespace
+          })
+
           state1 =
             state
             |> Map.update!(:query_cache, &Map.delete(&1, signature))

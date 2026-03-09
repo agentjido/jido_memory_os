@@ -4,7 +4,6 @@ defmodule JidoMemoryOs.MixProject do
   @version "0.1.0"
   @source_url "https://github.com/agentjido/jido_memory_os"
   @description "Tiered memory orchestration and governance layer for Jido agents"
-  @jido_memory_ref "f40f588144cf2476843210f3b5f6e23d10605e6e"
 
   def project do
     [
@@ -37,10 +36,12 @@ defmodule JidoMemoryOs.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:jido, "~> 2.0.0-rc.5"},
-      {:jido_action, github: "agentjido/jido_action", branch: "main", override: true},
-      {:jido_memory, github: "agentjido/jido_memory", ref: @jido_memory_ref},
+      {:jido, github: "amacc002/jido", branch: "feat/redis-storage-adapter", override: true},
+      {:jido_action, "~> 2.0.0"},
+      {:jido_memory, github: "amacc002/jido_memory", branch: "feat/pluggable-store-backends"},
       {:postgrex, "~> 0.20", optional: true},
+      {:ecto_sql, "~> 3.10", optional: true},
+      {:pgvector, "~> 0.3", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}

@@ -135,12 +135,20 @@ defmodule Jido.MemoryOS.Lifecycle do
   @doc """
   Builds attrs and mem_os metadata for a mid-tier segment record.
   """
-  @spec build_mid_segment([Record.t()], String.t(), pos_integer(), integer(), integer()) :: map()
-  def build_mid_segment(records, chain_id, ttl_ms, consolidation_version, now) do
+  @spec build_mid_segment(
+          [Record.t()],
+          String.t(),
+          pos_integer(),
+          integer(),
+          integer(),
+          keyword()
+        ) ::
+          map()
+  def build_mid_segment(records, chain_id, ttl_ms, consolidation_version, now, opts \\ []) do
     source_short_ids = Enum.map(records, & &1.id)
     segment_id = "segment_" <> stable_id({chain_id, source_short_ids})
     observed_at = records |> List.last() |> map_get(:observed_at, now)
-    text = summarize_records(records, 900)
+    text = apply_summarize_fn(records, 900, opts)
     tags = aggregate_tags(records) ++ ["memory_os:segment", "chain:" <> chain_id]
     persona_keys = aggregate_persona_keys(records)
 
@@ -178,8 +186,9 @@ defmodule Jido.MemoryOS.Lifecycle do
   @doc """
   Builds attrs and mem_os metadata for a mid-tier page record.
   """
-  @spec build_mid_page([Record.t()], String.t(), pos_integer(), integer(), integer()) :: map()
-  def build_mid_page(segment_records, chain_id, ttl_ms, consolidation_version, now) do
+  @spec build_mid_page([Record.t()], String.t(), pos_integer(), integer(), integer(), keyword()) ::
+          map()
+  def build_mid_page(segment_records, chain_id, ttl_ms, consolidation_version, now, opts \\ []) do
     segment_ids = Enum.map(segment_records, & &1.id)
 
     source_short_ids =
@@ -187,7 +196,7 @@ defmodule Jido.MemoryOS.Lifecycle do
 
     page_id = "page_" <> stable_id({chain_id, segment_ids})
     observed_at = segment_records |> List.last() |> map_get(:observed_at, now)
-    text = summarize_records(segment_records, 1_400)
+    text = apply_summarize_fn(segment_records, 1_400, opts)
     tags = aggregate_tags(segment_records) ++ ["memory_os:page", "chain:" <> chain_id]
     persona_keys = aggregate_persona_keys(segment_records)
 
@@ -448,6 +457,21 @@ defmodule Jido.MemoryOS.Lifecycle do
       end)
 
     Float.round(total / length(records), 4)
+  end
+
+  @doc false
+  @spec apply_summarize_fn([Record.t()], pos_integer(), keyword()) :: String.t()
+  defp apply_summarize_fn(records, max_chars, opts) do
+    case Keyword.get(opts, :summarize_fn) do
+      fun when is_function(fun, 2) ->
+        case fun.(records, max_chars) do
+          {:ok, text} when is_binary(text) -> text
+          _ -> summarize_records(records, max_chars)
+        end
+
+      _ ->
+        summarize_records(records, max_chars)
+    end
   end
 
   @spec summarize_records([Record.t()], pos_integer()) :: String.t()

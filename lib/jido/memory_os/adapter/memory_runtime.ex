@@ -86,7 +86,7 @@ defmodule Jido.MemoryOS.Adapter.MemoryRuntime do
              target,
              query_map,
              opts,
-             fn -> Runtime.recall(target, query_map) end
+             fn -> Runtime.recall(target, query_map, context.runtime_opts) end
            ) do
       {:ok, records}
     else

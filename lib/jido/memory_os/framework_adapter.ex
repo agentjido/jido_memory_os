@@ -10,7 +10,20 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
   - `normalize_error/2` consistent error mapping
   """
 
-  alias Jido.MemoryOS.{Compatibility, ErrorMapping}
+  alias Jido.MemoryOS.{Compatibility, ErrorMapping, Helpers}
+
+  # Re-export helpers that external modules call via FrameworkAdapter.*
+  defdelegate normalize_map(value), to: Helpers
+  defdelegate normalize_tags(tags), to: Helpers
+  defdelegate normalize_keyword(opts), to: Helpers
+  defdelegate maybe_put(map, key, value), to: Helpers
+  defdelegate normalize_non_empty_string(value, fallback), to: Helpers
+  defdelegate jido_error?(reason), to: Helpers
+  defdelegate find_text_in(map, fields), to: Helpers
+
+  @doc "Reads a value from a map, checking both atom and string keys."
+  @spec map_get(map(), atom() | String.t(), term()) :: term()
+  def map_get(map, key, default \\ nil), do: Helpers.map_get(map, key, default)
 
   @memory_opt_keys [
     :tier,
@@ -27,6 +40,8 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
     :context_token_budget,
     :semantic_provider,
     :semantic_timeout_ms,
+    :embed_fn,
+    :embedding_store,
     :timeout_ms,
     :call_timeout,
     :limit
@@ -98,6 +113,7 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
               map_get(payload_map, :query) ||
                 map_get(payload_map, :prompt) ||
                 map_get(payload_map, :text),
+            query_text: map_get(payload_map, :query_text),
             tags_any: map_get(payload_map, :tags),
             limit:
               map_get(payload_map, :memory_limit, map_get(payload_map, :limit, default_limit))
@@ -176,95 +192,13 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
   end
 
   @doc """
-  Normalizes map-like payloads.
-  """
-  @spec normalize_map(term()) :: map()
-  def normalize_map(%{} = map), do: map
-
-  def normalize_map(list) when is_list(list) do
-    if Keyword.keyword?(list), do: Map.new(list), else: %{}
-  end
-
-  def normalize_map(_value), do: %{}
-
-  @doc """
-  Reads atom/string keys from a map.
-  """
-  @spec map_get(map(), atom() | String.t(), term()) :: term()
-  def map_get(map, key, default \\ nil)
-
-  def map_get(map, key, default) when is_atom(key),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-
-  def map_get(map, key, default) when is_binary(key) do
-    case Enum.find(map, fn
-           {atom_key, _value} when is_atom(atom_key) -> Atom.to_string(atom_key) == key
-           _ -> false
-         end) do
-      {_, value} -> value
-      nil -> Map.get(map, key, default)
-    end
-  end
-
-  @doc """
-  Normalizes any tag-like payload to list-of-strings.
-  """
-  @spec normalize_tags(term()) :: [String.t()]
-  def normalize_tags(tags) when is_list(tags) do
-    tags
-    |> Enum.map(fn
-      tag when is_binary(tag) -> String.trim(tag)
-      tag when is_atom(tag) -> tag |> Atom.to_string() |> String.trim()
-      tag -> tag |> to_string() |> String.trim()
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  def normalize_tags(tag) when is_binary(tag), do: normalize_tags([tag])
-  def normalize_tags(tag) when is_atom(tag), do: normalize_tags([tag])
-  def normalize_tags(_tags), do: []
-
-  @doc """
-  Normalizes keywords from list or map input.
-  """
-  @spec normalize_keyword(term()) :: keyword()
-  def normalize_keyword(opts) when is_list(opts), do: opts
-  def normalize_keyword(%{} = opts), do: Enum.to_list(opts)
-  def normalize_keyword(_opts), do: []
-
-  @doc """
   Best-effort text extraction from turn payloads.
   """
   @spec text_from_payload(map() | keyword()) :: String.t() | nil
   def text_from_payload(payload) do
-    payload_map = normalize_map(payload)
-
-    candidates = [
-      map_get(payload_map, :text),
-      map_get(payload_map, :response_text),
-      map_get(payload_map, :response),
-      map_get(payload_map, :output),
-      map_get(payload_map, :query),
-      map_get(payload_map, :prompt),
-      map_get(payload_map, :message),
-      get_in(payload_map, ["text"]),
-      get_in(payload_map, ["response_text"]),
-      get_in(payload_map, ["response"]),
-      get_in(payload_map, ["output"]),
-      get_in(payload_map, ["query"]),
-      get_in(payload_map, ["prompt"]),
-      get_in(payload_map, ["message"])
-    ]
-
-    Enum.find_value(candidates, fn
-      value when is_binary(value) ->
-        trimmed = String.trim(value)
-        if trimmed == "", do: nil, else: trimmed
-
-      _ ->
-        nil
-    end)
+    payload
+    |> normalize_map()
+    |> find_text_in([:text, :response_text, :response, :output, :query, :prompt, :message])
   end
 
   @doc """
@@ -317,30 +251,4 @@ defmodule Jido.MemoryOS.FrameworkAdapter do
       _ -> fallback
     end
   end
-
-  @spec maybe_put(map(), atom(), term()) :: map()
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  @spec normalize_non_empty_string(term(), String.t() | nil) :: String.t() | nil
-  defp normalize_non_empty_string(value, fallback)
-
-  defp normalize_non_empty_string(value, fallback) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: fallback, else: trimmed
-  end
-
-  defp normalize_non_empty_string(nil, fallback), do: fallback
-
-  defp normalize_non_empty_string(value, fallback),
-    do: normalize_non_empty_string(to_string(value), fallback)
-
-  @spec jido_error?(term()) :: boolean()
-  defp jido_error?(%{__struct__: module}) when is_atom(module) do
-    module
-    |> Atom.to_string()
-    |> String.starts_with?("Elixir.Jido.Error.")
-  end
-
-  defp jido_error?(_reason), do: false
 end
