@@ -23,7 +23,7 @@ defmodule Jido.MemoryOS.Integration do
         memory_block =
           Integration.retrieve_context(agent, user_prompt,
             tool_names: tool_names,
-            render_opts: [header: "Context from previous conversations:"]
+            render_opts: [header: "Your memory of past interactions:"]
           )
 
         # 3. Inject into the SYSTEM prompt (critical — see note below).
@@ -61,6 +61,7 @@ defmodule Jido.MemoryOS.Integration do
 
   require Logger
 
+  alias Jido.MemoryOS.ContextBudget
   alias Jido.MemoryOS.Plugin
   alias Jido.MemoryOS.Retrieval.ContextPack
 
@@ -153,10 +154,25 @@ defmodule Jido.MemoryOS.Integration do
       end)
       |> Enum.reverse()
 
+    # Resolve dynamic context_token_budget (supports function or static integer)
+    turn_count = Map.get(agent.state, :turn_count, 0)
+    tier = Map.get(defaults, :tier)
+
+    budget_opts = [turn_count: turn_count, namespace: namespace, tier: tier]
+    raw_budget = Keyword.get(extension_opts, :context_token_budget)
+    resolved_budget = ContextBudget.resolve(raw_budget, budget_opts)
+
+    extension_opts =
+      if raw_budget do
+        Keyword.put(extension_opts, :context_token_budget, resolved_budget)
+      else
+        extension_opts
+      end
+
     Map.get(framework, :opts, [])
     |> Keyword.merge(extension_opts)
     |> maybe_put(:namespace, namespace)
-    |> maybe_put(:tier, Map.get(defaults, :tier))
+    |> maybe_put(:tier, tier)
     |> maybe_put(:server, Map.get(bindings, :server))
   end
 
@@ -175,6 +191,7 @@ defmodule Jido.MemoryOS.Integration do
 
     * `:tool_names` — list of tool name strings for the adapter (default `[]`)
     * `:render_opts` — keyword opts forwarded to `ContextPack.render/2`
+    * `:memory_opts` — keyword overrides merged into `build_memory_opts/1` (e.g., `context_token_budget: 6000`)
   """
   @spec retrieve_context(map(), String.t() | nil, keyword()) :: String.t() | nil
   def retrieve_context(agent, prompt, opts \\ [])
@@ -184,9 +201,10 @@ defmodule Jido.MemoryOS.Integration do
   def retrieve_context(agent, prompt, opts) when is_binary(prompt) do
     tool_names = Keyword.get(opts, :tool_names, [])
     render_opts = Keyword.get(opts, :render_opts, [])
+    memory_overrides = Keyword.get(opts, :memory_opts, [])
 
     turn_input = %{tool_names: tool_names, query_text: prompt}
-    memory_opts = build_memory_opts(agent)
+    memory_opts = Keyword.merge(build_memory_opts(agent), memory_overrides)
     adapter = resolve_adapter(agent)
 
     case adapter.pre_turn(agent, turn_input, memory_opts) do
@@ -209,6 +227,10 @@ defmodule Jido.MemoryOS.Integration do
     e ->
       Logger.debug("[MemoryOS.Integration] retrieve_context exception: #{Exception.message(e)}")
 
+      nil
+  catch
+    :exit, reason ->
+      Logger.debug("[MemoryOS.Integration] retrieve_context exit: #{inspect(reason)}")
       nil
   end
 

@@ -174,7 +174,7 @@ def prepare_before_cmd(agent, params) do
     agent,
     user_prompt,
     tool_names: tool_names,
-    render_opts: [header: "Context from previous conversations with this user:"]
+    render_opts: [header: "Your memory of past interactions with this user:"]
   )
 
   # Inject into system prompt (see below)
@@ -362,7 +362,7 @@ prepare_before_cmd runs:
   1. ensure_namespace → sets "ask_anything_usr_42" on plugin state
   2. set_system_prompt → base prompt with user name, datetime, skills
   3. retrieve_context → finds prior memories about meetings
-     -> "Context from previous conversations with this user:
+     -> "Your memory of past interactions with this user:
          - User's schedule: Standup at 3:30 PM, Engineering Daily at 4 PM
          - User prefers short meeting summaries"
   4. Inject into system prompt → LLM sees memories as authoritative context

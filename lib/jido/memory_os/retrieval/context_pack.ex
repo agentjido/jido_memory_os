@@ -22,7 +22,7 @@ defmodule Jido.MemoryOS.Retrieval.ContextPack do
   ## Rendering for Prompt Injection
 
       ContextPack.render(pack)
-      # => "Context from previous conversations with this user:
+      # => "Your memory of past interactions with this user:
       #     - Standup at 3:30 PM"
 
       ContextPack.render(pack, header: "Memory from prior sessions:")
@@ -73,20 +73,21 @@ defmodule Jido.MemoryOS.Retrieval.ContextPack do
   ## Options
 
     * `:header` — custom header line (default:
-      `"Context from previous conversations with this user:"`)
+      `"Your memory of past interactions with this user:"`)
   """
   @spec render(map(), keyword()) :: String.t() | nil
   def render(pack, opts \\ [])
 
   def render(%{groups: groups}, opts) when is_list(groups) and groups != [] do
     header =
-      Keyword.get(opts, :header, "Context from previous conversations with this user:")
+      Keyword.get(opts, :header, "Your memory of past interactions with this user:")
 
     entries =
       groups
       |> Enum.flat_map(&Map.get(&1, :entries, []))
       |> Enum.map(&String.trim(Map.get(&1, :text, "")))
       |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
 
     if entries == [] do
       nil

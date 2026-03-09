@@ -30,7 +30,7 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
   @spec lexical_similarity(map(), String.t() | nil, [String.t()]) :: number()
   defp lexical_similarity(_candidate, nil, _query_tokens), do: 0.5
 
-  defp lexical_similarity(candidate, query_text, query_tokens) do
+  defp lexical_similarity(candidate, query_text, query_tokens) when is_map(candidate) do
     candidate_tokens = tokenize(candidate.normalized_text)
     query_lookup = token_lookup(query_tokens)
     unique_candidate_tokens = Enum.uniq(candidate_tokens)
@@ -49,6 +49,7 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
 
     phrase_match =
       if is_binary(query_text) and query_text != "" and
+           is_binary(candidate.normalized_text) and
            String.contains?(candidate.normalized_text, String.downcase(query_text)) do
         1.0
       else
@@ -56,17 +57,35 @@ defmodule Jido.MemoryOS.Retrieval.SemanticProvider.Lexical do
       end
 
     clamp(Float.round(0.65 * overlap_score + 0.35 * phrase_match, 4), 0.0, 1.0)
+  rescue
+    _ -> 0.5
   end
 
   @spec tokenize(String.t() | nil) :: [String.t()]
   defp tokenize(nil), do: []
 
-  defp tokenize(text) do
-    text
+  defp tokenize(text) when is_binary(text) do
+    # Ensure valid UTF-8 before passing to Unicode regex — invalid bytes crash :re.run
+    safe_text =
+      if String.valid?(text) do
+        text
+      else
+        text
+        |> :unicode.characters_to_binary(:utf8, :utf8)
+        |> case do
+          {:error, valid, _rest} -> valid
+          {:incomplete, valid, _rest} -> valid
+          bin when is_binary(bin) -> bin
+        end
+      end
+
+    safe_text
     |> String.downcase()
-    |> String.split(~r/[^\p{L}\p{N}_]+/u, trim: true)
+    |> Regex.split(~r/[^\p{L}\p{N}_]+/u, trim: true)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
+  rescue
+    _ -> []
   end
 
   @spec token_lookup([String.t()]) :: %{optional(String.t()) => true}
