@@ -16,7 +16,8 @@ The design is aligned with [Memory OS of AI Agent (arXiv:2506.06326)](https://ar
 ## Architecture
 ```mermaid
 flowchart TD
-    API["Jido.MemoryOS facade API"] --> MM["MemoryManager control plane"]
+    COMMON["Jido.Memory.Plugin + Jido.MemoryOS.Provider"] --> API["Jido.MemoryOS facade API"]
+    API --> MM["MemoryManager control plane"]
     MM --> RT["Adapter.MemoryRuntime"]
     RT --> STORE["Jido.Memory.Runtime and stores"]
 
@@ -25,7 +26,7 @@ flowchart TD
     MM --> GOV["Governance and safety"]
     MM --> OPS["Journal, cache, retries, metrics"]
 
-    INTEG["Plugin, actions, framework adapters"] --> API
+    INTEG["Jido.MemoryOS.Plugin, actions, framework adapters"] --> API
     ROLL["Migration and ReleaseController"] --> API
 ```
 
@@ -56,8 +57,11 @@ flowchart TD
 - All implementation phases in [`notes/planning`](https://github.com/agentjido/jido_memory_os/tree/main/notes/planning) are complete:
   - Phase 1 through Phase 8
   - Cross-phase acceptance scenarios `X-1` through `X-8`
+- Provider bridge adoption is covered by:
+  - `phase_09_integration_test.exs`
+  - common `Jido.Memory.Plugin` interoperability over `Jido.MemoryOS.Provider`
 - Integration coverage currently includes:
-  - `phase_01_integration_test.exs` through `phase_08_integration_test.exs`
+  - `phase_01_integration_test.exs` through `phase_09_integration_test.exs`
   - `cross_phase_acceptance_test.exs`
 
 ## What It Includes
@@ -96,6 +100,40 @@ opts = [server: Jido.MemoryOS.MemoryManager, actor_id: target.id, actor_group: t
 {:ok, explain} =
   Jido.MemoryOS.explain_retrieval(target, %{text_contains: "concise", limit: 5}, opts)
 ```
+
+## Common Provider Integration
+
+For core remember/retrieve/forget flows, MemoryOS can now be selected through the common `jido_memory` plugin:
+
+```elixir
+defmodule MyApp.Agent do
+  use Jido.Agent,
+    name: "memory_os_provider_agent",
+    default_plugins: %{__memory__: false},
+    plugins: [
+      {Jido.Memory.Plugin,
+       %{
+         provider:
+           {Jido.MemoryOS.Provider,
+            [
+              server: MyApp.MemoryManager,
+              app_config: %{
+                tiers: %{
+                  short: %{store: {Jido.Memory.Store.ETS, [table: :memory_os_short]}},
+                  mid: %{store: {Jido.Memory.Store.ETS, [table: :memory_os_mid]}},
+                  long: %{store: {Jido.Memory.Store.ETS, [table: :memory_os_long]}}
+                }
+              }
+            ]}
+       }}
+    ]
+end
+```
+
+Use `Jido.MemoryOS.Plugin` when you need MemoryOS-specific routes and framework-adapter hooks:
+- `memory_os.pre_turn`
+- `memory_os.post_turn`
+- `memory_os.consolidate`
 
 ## Migration and Rollout
 ```elixir

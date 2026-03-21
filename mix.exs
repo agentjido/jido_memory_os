@@ -37,14 +37,24 @@ defmodule JidoMemoryOs.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:jido, "~> 2.0.0-rc.5"},
-      {:jido_action, github: "agentjido/jido_action", branch: "main", override: true},
-      {:jido_memory, github: "agentjido/jido_memory", ref: @jido_memory_ref},
+      {:jido, "~> 2.1"},
+      {:jido_action, "~> 2.1", override: true},
+      jido_memory_dep(),
       {:postgrex, "~> 0.20", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
+  end
+
+  defp jido_memory_dep do
+    local_path = Path.expand("../jido_memory", __DIR__)
+
+    if Mix.env() in [:dev, :test] and File.exists?(Path.join(local_path, "mix.exs")) do
+      {:jido_memory, path: local_path}
+    else
+      {:jido_memory, github: "agentjido/jido_memory", ref: @jido_memory_ref}
+    end
   end
 
   defp package do
