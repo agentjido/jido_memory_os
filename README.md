@@ -1,7 +1,19 @@
-# Jido MemoryOS
+# DEPRECATED: Jido MemoryOS
+
+> [!WARNING]
+> `jido_memory_os` is deprecated and is being retired in favor of
+> [`jido_memory`](https://github.com/agentjido/jido_memory). This repository
+> will remain available in read-only form for historical reference while the
+> ecosystem transitions, but new work should target `jido_memory`.
 
 MemoryOS is a tiered memory orchestration layer built on top of
 [`jido_memory`](https://github.com/agentjido/jido_memory).
+
+## Transition Status
+- New memory work should be implemented in
+  [`jido_memory`](https://github.com/agentjido/jido_memory).
+- `jido_memory_os` remains online as a reference snapshot during the transition.
+- Expect this repository to become read-only; do not plan new feature work here.
 
 ## What MemoryOS Is
 `Jido.MemoryOS` is a memory operating layer for agents that combines:
@@ -53,6 +65,9 @@ flowchart TD
 | 7 | [`07 - Migration, Rollout, and Performance Engineering`](docs/developer/07-migration-rollout-and-performance-engineering.md) | Migration flow, cutover/rollback, SLO benchmarking |
 
 ## Status
+- Repository status: deprecated
+- Transition target: [`jido_memory`](https://github.com/agentjido/jido_memory)
+- Maintenance policy: reference-only during migration, then read-only
 - All implementation phases in [`notes/planning`](https://github.com/agentjido/jido_memory_os/tree/main/notes/planning) are complete:
   - Phase 1 through Phase 8
   - Cross-phase acceptance scenarios `X-1` through `X-8`
@@ -121,6 +136,9 @@ opts = [server: Jido.MemoryOS.MemoryManager, actor_id: target.id, actor_group: t
 mix deps.get
 mix test
 ```
+
+Development for new memory capabilities should move to
+[`jido_memory`](https://github.com/agentjido/jido_memory).
 
 ## Planning Docs
 - Index: [`notes/planning/README.md`](https://github.com/agentjido/jido_memory_os/blob/main/notes/planning/README.md)
